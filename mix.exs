@@ -5,6 +5,9 @@ defmodule Fort.MixProject do
     [
       app: :fort,
       version: "0.1.0",
+      description:
+        "Dual-routed audit logging for Elixir/Phoenix: atomic audit trail + structured JSON logs",
+      package: package(),
       elixir: "~> 1.15",
       start_permanent: Mix.env() == :prod,
       elixirc_paths: elixirc_paths(Mix.env()),
@@ -22,6 +25,13 @@ defmodule Fort.MixProject do
 
   defp elixirc_paths(:test), do: ["lib", "test/support"]
   defp elixirc_paths(_), do: ["lib"]
+
+  defp package do
+    [
+      licenses: ["MIT"],
+      links: %{"GitHub" => "https://github.com/DarynOngera/fort"}
+    ]
+  end
 
   defp deps do
     [
