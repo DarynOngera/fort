@@ -47,7 +47,8 @@ defmodule Fort.Audit do
         %AuditedMulti{multi: multi, audit_steps: steps} = audited,
         name,
         attrs_or_fn
-      ) do
+      )
+      when is_map(attrs_or_fn) or is_function(attrs_or_fn, 1) do
     attrs_fn = if is_function(attrs_or_fn, 1), do: attrs_or_fn, else: fn _ -> attrs_or_fn end
 
     updated_multi =

@@ -1,10 +1,10 @@
 # Fort
 
-Dual-routed audit logging for Elixir/Phoenix applications: persists audit trail to PostgreSQL and emits structured JSON via `:logger`.
+Drop-in, atomic audit logging for Elixir/Phoenix applications. Wrap existing `Ecto.Multi` at call site. No rewiring business logic, no new type to thread through helpers. Persists audit trail to PostgreSQL and emits structured JSON via `:logger`.
 
 ## Invariant
 
-> **A business transaction must never be reported as complete (`{:ok, _}`) unless its audit trail is also complete, written atomically with it.**
+> **A business transaction can never be reported as complete (`{:ok, _}`) unless its audit trail is also complete, written atomically with it.**
 
 This is enforced by the type system at the `Fort.Audit.transact/4` boundary: only an `AuditedMulti` with at least one audit step can be passed to it. A bare `Ecto.Multi` causes a `FunctionClauseError`; an `AuditedMulti` with zero audit steps raises `MissingAuditStepError`.
 
@@ -25,6 +25,8 @@ Configure the Ecto repo in `config/config.exs`:
 ```elixir
 config :fort, :repo, MyApp.Repo
 ```
+
+> **Note:** `Fort.Application` reads `:repo` at boot. If it's unconfigured, the host app will crash on startup, not on first audit call — this is intentional fail-fast behavior.
 
 Install and run the migration to create the `audit_logs` table:
 

@@ -5,9 +5,31 @@ on:
     tags:
       - "v*"
 
+env:
+  FORT_DB_HOST: localhost
+  FORT_DB_USERNAME: postgres
+  FORT_DB_PASSWORD: postgres
+  FORT_DB_DATABASE: fort_test
+
 jobs:
   publish:
     runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          MIX_ENV: test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: fort_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
       - uses: actions/checkout@v4
@@ -19,6 +41,11 @@ jobs:
 
       - name: Install dependencies
         run: mix deps.get
+
+      - name: Compile and run tests
+        run: |
+          mix compile --warnings-as-errors
+          mix test
 
       - name: Publish to hex.pm
         env:
