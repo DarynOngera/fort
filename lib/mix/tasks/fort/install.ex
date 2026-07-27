@@ -1,4 +1,5 @@
 defmodule Mix.Tasks.Fort.Install do
+  @moduledoc false
   @shortdoc "Copies the Fort audit_logs migration into the host app"
 
   use Mix.Task

@@ -5,9 +5,9 @@ defmodule Fort.AuditIntegrationTest do
 
   alias Ecto.Changeset
   alias Ecto.Multi
+  alias Fort.Audit
   alias Fort.AuditedMulti
   alias Fort.MissingAuditStepError
-  alias Fort.Audit
   alias Fort.Schemas.AuditLog
 
   @repo Application.compile_env(:fort, :repo)

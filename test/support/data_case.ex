@@ -1,5 +1,9 @@
 defmodule Fort.DataCase do
+  @moduledoc false
+
   use ExUnit.CaseTemplate
+
+  alias Ecto.Adapters.SQL.Sandbox
 
   using do
     quote do
@@ -13,8 +17,8 @@ defmodule Fort.DataCase do
   setup tags do
     repo = Application.fetch_env!(:fort, :repo)
 
-    pid = Ecto.Adapters.SQL.Sandbox.start_owner!(repo, shared: not tags[:async])
-    on_exit(fn -> Ecto.Adapters.SQL.Sandbox.stop_owner(pid) end)
+    pid = Sandbox.start_owner!(repo, shared: not tags[:async])
+    on_exit(fn -> Sandbox.stop_owner(pid) end)
     :ok
   end
 end
