@@ -31,6 +31,10 @@ defmodule Fort.Repo.Migrations.CreateAuditLogs do
       add :metadata, :map, default: fragment("'{}'::jsonb")
     end
 
+    execute(
+      "ALTER TABLE audit_logs ADD CONSTRAINT outcome_must_be_success_or_failure CHECK (outcome IN ('success', 'failure'))"
+    )
+
     create index(:audit_logs, :action)
     create index(:audit_logs, :category)
     create index(:audit_logs, :outcome)
