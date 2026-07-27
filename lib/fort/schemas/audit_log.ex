@@ -41,29 +41,29 @@ defmodule Fort.Schemas.AuditLog do
   @type t :: %__MODULE__{}
 
   schema "audit_logs" do
-    field :actor_id, :string
-    field :actor_type, :string
-    field :actor_name, :string
-    field :actor_identifier, :string
+    field(:actor_id, :string)
+    field(:actor_type, :string)
+    field(:actor_name, :string)
+    field(:actor_identifier, :string)
 
-    field :subject_id, :string
-    field :subject_type, :string
-    field :subject_name, :string
-    field :subject_reference, :string
+    field(:subject_id, :string)
+    field(:subject_type, :string)
+    field(:subject_name, :string)
+    field(:subject_reference, :string)
 
-    field :action, :string
-    field :category, :string
-    field :description, :string
+    field(:action, :string)
+    field(:category, :string)
+    field(:description, :string)
 
-    field :outcome, :string
+    field(:outcome, :string)
 
-    field :profile_id, :string
-    field :organization_id, :string
+    field(:profile_id, :string)
+    field(:organization_id, :string)
 
-    field :before_data, :map, default: %{}
-    field :after_data, :map, default: %{}
-    field :changes, :map, default: %{}
-    field :metadata, :map, default: %{}
+    field(:before_data, :map, default: %{})
+    field(:after_data, :map, default: %{})
+    field(:changes, :map, default: %{})
+    field(:metadata, :map, default: %{})
 
     timestamps(updated_at: false, type: :utc_datetime_usec)
   end

@@ -43,7 +43,11 @@ defmodule Fort.Audit do
   """
   @spec append_to_multi(AuditedMulti.t(), atom(), map() | (map() -> map())) ::
           AuditedMulti.t()
-  def append_to_multi(%AuditedMulti{multi: multi, audit_steps: steps} = audited, name, attrs_or_fn) do
+  def append_to_multi(
+        %AuditedMulti{multi: multi, audit_steps: steps} = audited,
+        name,
+        attrs_or_fn
+      ) do
     attrs_fn = if is_function(attrs_or_fn, 1), do: attrs_or_fn, else: fn _ -> attrs_or_fn end
 
     updated_multi =
