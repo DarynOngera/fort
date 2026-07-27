@@ -1,5 +1,7 @@
 import Config
 
+config :fort, :ecto_repos, [Fort.TestRepo]
+
 config :fort, :repo, Fort.TestRepo
 
 hostname = System.get_env("FORT_DB_HOST")

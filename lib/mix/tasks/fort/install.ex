@@ -1,14 +1,15 @@
 defmodule Mix.Tasks.Fort.Install do
+  @moduledoc false
   @shortdoc "Copies the Fort audit_logs migration into the host app"
 
   use Mix.Task
 
   @impl true
-  def run(_args) do
+  def run(args) do
     Mix.Task.run("app.start")
 
     source_dir = Application.app_dir(:fort, "priv/test_repo/migrations")
-    target_dir = "priv/repo/migrations"
+    target_dir = target_dir(args)
 
     File.mkdir_p!(target_dir)
 
@@ -41,5 +42,18 @@ defmodule Mix.Tasks.Fort.Install do
 
     See https://hex.pm/packages/fort for full documentation.
     """)
+  end
+
+  defp target_dir([dir]), do: dir
+
+  defp target_dir(_args) do
+    case Application.fetch_env(:fort, :repo) do
+      {:ok, repo_module} ->
+        repo_name = repo_module |> Module.split() |> List.last() |> Macro.underscore()
+        "priv/#{repo_name}/migrations"
+
+      :error ->
+        "priv/repo/migrations"
+    end
   end
 end
