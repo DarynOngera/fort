@@ -12,5 +12,17 @@ defmodule Fort.AuditedMulti do
   @enforce_keys [:multi]
   defstruct [:multi, audit_steps: []]
 
-  @type t :: %__MODULE__{multi: Ecto.Multi.t(), audit_steps: [atom()]}
+  @type t :: %__MODULE__{multi: term(), audit_steps: [atom()]}
+
+  @doc """
+  Returns the underlying `Ecto.Multi`.
+  """
+  @spec multi(t()) :: Ecto.Multi.t()
+  def multi(%__MODULE__{multi: multi}), do: multi
+
+  @doc """
+  Returns the list of audit step names.
+  """
+  @spec audit_steps(t()) :: [atom()]
+  def audit_steps(%__MODULE__{audit_steps: steps}), do: steps
 end

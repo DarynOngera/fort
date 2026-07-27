@@ -151,6 +151,7 @@ defmodule Fort.AuditIntegrationTest do
         |> Audit.append_to_multi(:audit, %{})
 
       assert {:error, :audit, _failed_value, _changes} = @repo.transaction(audited.multi)
+
       assert @repo.aggregate(AuditLog, :count, :id) == 0
     end
 

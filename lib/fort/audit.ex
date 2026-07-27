@@ -39,7 +39,7 @@ defmodule Fort.Audit do
 
   @doc """
   Appends a success audit step to an `AuditedMulti`.
-  Accepts a static map or a function from accumulated changes.
+  Accepts a static map or a 1-arity function from accumulated changes.
   """
   @spec append_to_multi(AuditedMulti.t(), atom(), map() | (map() -> map())) ::
           AuditedMulti.t()
