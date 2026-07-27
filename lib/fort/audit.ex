@@ -93,12 +93,7 @@ defmodule Fort.Audit do
     do_log(repo(), attrs)
   end
 
-  defp repo do
-    Application.fetch_env!(:fort, :repo)
-  rescue
-    ArgumentError ->
-      raise "config :fort, :repo is not set. Add `config :fort, :repo, MyApp.Repo` to your config."
-  end
+  defp repo, do: :persistent_term.get({:fort, :repo})
 
   defp do_log(repo, attrs) do
     %AuditLog{}
