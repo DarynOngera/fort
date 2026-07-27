@@ -29,4 +29,12 @@ defmodule Fort.AuditLogDbConstraintTest do
       )
     end
   end
+
+  test "DB CHECK constraint rejects invalid outcome value" do
+    assert_raise Postgrex.Error, ~r/outcome_must_be_success_or_failure/, fn ->
+      @repo.query!(
+        "INSERT INTO audit_logs (#{@base_fields}, actor_id, actor_type, action, outcome) VALUES (#{@base_values}, 'a', 't', 'test', 'invalid')"
+      )
+    end
+  end
 end

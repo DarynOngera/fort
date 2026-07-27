@@ -43,22 +43,13 @@ defmodule Fort.Audit do
   """
   @spec append_to_multi(AuditedMulti.t(), atom(), map() | (map() -> map())) ::
           AuditedMulti.t()
-  def append_to_multi(%AuditedMulti{multi: multi, audit_steps: steps} = audited, name, attrs)
-      when is_map(attrs) do
-    updated_multi =
-      Multi.run(multi, name, fn repo, _changes ->
-        do_log(repo, Map.put(attrs, :outcome, "success"))
-      end)
+  def append_to_multi(%AuditedMulti{multi: multi, audit_steps: steps} = audited, name, attrs_or_fn) do
+    attrs_fn = if is_function(attrs_or_fn, 1), do: attrs_or_fn, else: fn _ -> attrs_or_fn end
 
-    %{audited | multi: updated_multi, audit_steps: [name | steps]}
-  end
-
-  def append_to_multi(%AuditedMulti{multi: multi, audit_steps: steps} = audited, name, attrs_fn)
-      when is_function(attrs_fn, 1) do
     updated_multi =
       Multi.run(multi, name, fn repo, changes ->
-        attrs = attrs_fn.(changes)
-        do_log(repo, Map.put(attrs, :outcome, "success"))
+        attrs = Map.put(attrs_fn.(changes), :outcome, "success")
+        do_log(repo, attrs)
       end)
 
     %{audited | multi: updated_multi, audit_steps: [name | steps]}
@@ -162,6 +153,6 @@ defmodule Fort.Audit do
 
   defp format_error(%Changeset{} = changeset), do: inspect(changeset.errors)
   defp format_error(reason) when is_atom(reason), do: reason
-  defp format_error({key, value}) when is_atom(key), do: %{key => value}
+  defp format_error({key, value}) when is_atom(key), do: inspect({key, value})
   defp format_error(reason), do: inspect(reason)
 end

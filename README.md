@@ -15,7 +15,7 @@ Add `fort` to your `mix.exs`:
 ```elixir
 def deps do
   [
-    {:fort, path: "~/projects/fort"}
+    {:fort, "~> 0.1"}
   ]
 end
 ```
@@ -26,13 +26,12 @@ Configure the Ecto repo in `config/config.exs`:
 config :fort, :repo, MyApp.Repo
 ```
 
-Run the migration to create the `audit_logs` table:
+Install and run the migration to create the `audit_logs` table:
 
 ```bash
+mix fort.install
 mix ecto.migrate
 ```
-
-You'll need to copy the migration from `priv/test_repo/migrations/` to your app's `priv/repo/migrations/` directory.
 
 ## Canonical usage
 

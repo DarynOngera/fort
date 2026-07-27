@@ -197,7 +197,7 @@ defmodule Fort.AuditIntegrationTest do
                )
 
       audit_log = @repo.one!(AuditLog)
-      assert audit_log.metadata["error"] == %{"validation" => "bad"}
+      assert audit_log.metadata["error"] == ~s[{:validation, "bad"}]
     end
 
     test "preserves existing metadata from opts" do

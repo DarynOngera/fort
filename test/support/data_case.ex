@@ -3,8 +3,6 @@ defmodule Fort.DataCase do
 
   using do
     quote do
-      alias Fort.Repo
-
       import Ecto
       import Ecto.Changeset
       import Ecto.Query
