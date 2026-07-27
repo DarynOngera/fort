@@ -2,9 +2,12 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: 
+      - dev
   pull_request:
-    branches: [main]
+    branches:
+      - dev
+      - main 
 
 env:
   FORT_DB_HOST: localhost
@@ -20,6 +23,7 @@ jobs:
       postgres:
         image: postgres:16
         env:
+          MIX_ENV: test
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: fort_test
