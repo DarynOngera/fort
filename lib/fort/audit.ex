@@ -13,6 +13,23 @@ defmodule Fort.Audit do
   ## Configuration
 
       config :fort, :repo, MyApp.Repo
+      config :fort, :logger_label_fields, [:outcome, :action]
+
+  ### `:repo` (required)
+
+  The Ecto repo used for all audit log persistence.
+
+  ### `:logger_label_fields` (optional)
+
+  Controls which metadata fields are emitted as top-level Logger metadata keys
+  (indexed as labels by Loki Promtail, Datadog, Elasticsearch, etc.).
+
+  Default: `[:outcome, :actor_type, :subject_type]` — the three fields whose
+  cardinality is bounded by design. All remaining fields (`actor_id`,
+  `subject_id`, `category`, `audit_log_id`) nest under a single `:details` key
+  to prevent accidental label-cardinality explosions.
+
+  See `Fort.Audit.Emitter` for the full rationale.
 
   ## Usage
 
@@ -57,10 +74,48 @@ defmodule Fort.Audit do
         metadata: %{reason: reason}
       })
 
-  ## Notes
+  ## Logger metadata structure
+
+  Logger lines emitted by `transact/4` and `log/1` follow a two-tier metadata
+  structure to prevent accidental label-cardinality explosions:
+
+    * **Labels** — top-level metadata keys (configured via
+      `:logger_label_fields`, default `[:outcome, :actor_type, :subject_type]`)
+    * **Body** — everything else nested under a single `:details` key (one JSON
+      object, not N individual indexed fields)
+
+  See `Fort.Audit.Emitter` for full rationale and configuration.
+
+  ## Shipment to external systems
+
+  Fort's responsibility ends at emitting a well-structured Elixir `Logger` line.
+  Getting logs into Loki, Elasticsearch, Datadog, or any other collector is the
+  job of the host application's existing observability pipeline — Promtail,
+  Vector, Fluent Bit, `logger_json`, or any Elixir Logger backend already in use.
+  Fort does not ship a dedicated Loki/Elasticsearch/Datadog client for the same
+  reason it does not ship a web framework adapter in the core library: those are
+  integration concerns best solved by the community or the host app against
+  stable `Logger` output.
+
+  ## Reconciliation (`mix fort.reconcile`)
+
+  Rows that were persisted but never emitted to Logger (e.g., a crash between
+  the DB commit and the `emitted_at` stamp) can be recovered via:
+
+      mix fort.reconcile
+
+  This queries unemitted rows using the partial index `idx_audit_logs_unemitted`,
+  re-emits each via `Logger`, and stamps `emitted_at`. The function
+  `Fort.Audit.Emitter.reconcile/2` is also public for host apps that want to
+  schedule reconciliation from Oban, Quantum, or a `:timer.send_interval`.
+
+  ## At-least-once
 
   Logger emission is **at-least-once** — a crash between the Logger call and
-  the `emitted_at` DB stamp may cause re-emission on restart.
+  the `emitted_at` DB stamp may cause re-emission on restart. Downstream
+  consumers should dedupe on `audit_logs.id` for exactly-once processing. The
+  `mix fort.reconcile` task is the recovery mechanism for the permanent case
+  (crash before the stamp ever happens).
   """
 
   require Logger
@@ -187,6 +242,52 @@ defmodule Fort.Audit do
   @spec log(map()) :: {:ok, AuditLog.t()} | {:error, Changeset.t()}
   def log(attrs) do
     do_log(repo(), attrs)
+  end
+
+  @doc """
+  Re-processes audit log rows that were never emitted to Logger.
+
+  Queries rows where `emitted_at IS NULL` (using the partial index
+  `idx_audit_logs_unemitted`) in `inserted_at` order, up to `batch_size`
+  rows per call. Re-emits each row via `Emitter.emit_and_stamp/2`.
+
+  Idempotent — rows already stamped are excluded by the query, so a
+  second call with no new unemitted rows is a no-op.
+
+  Returns `{:ok, count}` where count is the number of rows successfully
+  re-processed. Individual row failures are logged at error level but
+  do not halt the batch.
+  """
+  @spec reconcile(Ecto.Repo.t(), pos_integer()) :: {:ok, non_neg_integer()}
+  def reconcile(repo, batch_size \\ 100)
+
+  def reconcile(repo, batch_size) when is_integer(batch_size) and batch_size > 0 do
+    import Ecto.Query
+
+    query =
+      from(al in AuditLog,
+        where: is_nil(al.emitted_at),
+        order_by: al.inserted_at,
+        limit: ^batch_size
+      )
+
+    count =
+      repo.all(query)
+      |> Enum.reduce(0, fn audit_log, acc ->
+        try do
+          {:ok, _updated} = Emitter.emit_and_stamp(repo, audit_log)
+          acc + 1
+        rescue
+          reason ->
+            Logger.error(fn ->
+              {"audit_log.reconcile_failed", [audit_log_id: audit_log.id, error: inspect(reason)]}
+            end)
+
+            acc
+        end
+      end)
+
+    {:ok, count}
   end
 
   defp repo, do: :persistent_term.get({:fort, :repo})
