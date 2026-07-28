@@ -79,6 +79,7 @@ defmodule Fort.Audit do
   alias Ecto.Changeset
   alias Ecto.Multi
   alias Fort.AuditedMulti
+  alias Fort.Audit.Emitter
   alias Fort.MissingAuditStepError
   alias Fort.Schemas.AuditLog
 
@@ -177,9 +178,18 @@ defmodule Fort.Audit do
     raise MissingAuditStepError
   end
 
-  def transact(%AuditedMulti{multi: multi}, action, actor_id, opts) do
+  def transact(%AuditedMulti{multi: multi, audit_steps: steps}, action, actor_id, opts) do
     case repo().transaction(multi) do
       {:ok, changes} ->
+        # Emit Logger lines for committed audit rows and stamp emitted_at.
+        # This runs outside the Postgres transaction — if it crashes the
+        # audit rows are already durable and will be re-emitted on restart.
+        Enum.each(steps, fn step_name ->
+          if audit_log = Map.get(changes, step_name) do
+            Emitter.emit_and_stamp(repo(), audit_log)
+          end
+        end)
+
         {:ok, changes}
 
       {:error, _op, reason, _changes} ->
@@ -210,35 +220,20 @@ defmodule Fort.Audit do
   end
 
   defp do_log(repo, attrs) do
-    %AuditLog{}
-    |> AuditLog.changeset(attrs)
-    |> repo.insert()
-    |> log_to_logger()
-  end
+    case %AuditLog{}
+         |> AuditLog.changeset(attrs)
+         |> repo.insert() do
+      {:ok, %AuditLog{} = audit_log} ->
+        Emitter.emit_and_stamp(repo, audit_log)
+        {:ok, audit_log}
 
-  defp log_to_logger({:ok, %AuditLog{} = audit_log}) do
-    Logger.info(fn ->
-      {audit_log.action,
-       [
-         actor_id: audit_log.actor_id,
-         actor_type: audit_log.actor_type,
-         subject_id: audit_log.subject_id,
-         subject_type: audit_log.subject_type,
-         outcome: audit_log.outcome,
-         category: audit_log.category,
-         audit_log_id: audit_log.id
-       ]}
-    end)
+      {:error, %Changeset{} = changeset} ->
+        Logger.error(fn ->
+          {"audit_log.persistence_failed", [errors: inspect(changeset.errors)]}
+        end)
 
-    {:ok, audit_log}
-  end
-
-  defp log_to_logger({:error, %Changeset{} = changeset} = error) do
-    Logger.error(fn ->
-      {"audit_log.persistence_failed", [errors: inspect(changeset.errors)]}
-    end)
-
-    error
+        {:error, changeset}
+    end
   end
 
   defp log_failure(action, actor_id, opts, reason) do
