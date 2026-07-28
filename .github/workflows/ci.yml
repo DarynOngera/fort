@@ -19,11 +19,13 @@ jobs:
   test:
     runs-on: ubuntu-latest
 
+    env:
+      MIX_ENV: test
+
     services:
       postgres:
         image: postgres:16
         env:
-          MIX_ENV: test
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: fort_test

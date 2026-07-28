@@ -155,6 +155,19 @@ end)
 |> Fort.Audit.transact("test.action", "actor-1", actor_type: "system")
 ```
 
+### Deriving before/after/changes from a changeset
+
+Instead of hand-building `before_data`/`after_data`/`changes` maps, use `Fort.Audit.from_changeset/1` to derive them directly from an `Ecto.Changeset`:
+
+```elixir
+changeset
+|> Fort.Audit.from_changeset()
+|> Map.merge(%{actor_id: actor.id, actor_type: "admin_user", action: "user.updated"})
+|> then(&Fort.Audit.append_to_multi(multi, :audit, &1))
+```
+
+Fields marked `redact: true` in your Ecto schema are stripped entirely from all three maps — no masking, no placeholders. See `Fort.Audit.from_changeset/1` for details.
+
 ## Schema
 
 | Field | Type | Required | Description |

@@ -5,21 +5,25 @@ on:
     tags:
       - "v*"
 
-env:
-  FORT_DB_HOST: localhost
-  FORT_DB_USERNAME: postgres
-  FORT_DB_PASSWORD: postgres
-  FORT_DB_DATABASE: fort_test
-
 jobs:
   publish:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    environment: hex-publish
+
+    env:
+      MIX_ENV: test
+      FORT_DB_HOST: localhost
+      FORT_DB_USERNAME: postgres
+      FORT_DB_PASSWORD: postgres
+      FORT_DB_DATABASE: fort_test
 
     services:
       postgres:
         image: postgres:16
         env:
-          MIX_ENV: test
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: fort_test
@@ -39,13 +43,30 @@ jobs:
           elixir-version: "1.19"
           otp-version: "28"
 
+      - uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-${{ hashFiles('**/mix.lock') }}
+
       - name: Install dependencies
         run: mix deps.get
 
-      - name: Compile and run tests
+      - name: Compile with warnings as errors
+        run: mix compile --warnings-as-errors
+
+      - name: Run tests
+        run: mix test
+
+      - name: Verify tag matches mix.exs version
         run: |
-          mix compile --warnings-as-errors
-          mix test
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          MIX_VERSION=$(mix run -e 'IO.puts(Mix.Project.config()[:version])')
+          if [ "$TAG_VERSION" != "$MIX_VERSION" ]; then
+            echo "Tag v$TAG_VERSION doesn't match mix.exs version $MIX_VERSION"
+            exit 1
+          fi
 
       - name: Publish to hex.pm
         env:

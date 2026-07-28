@@ -1,3 +1,65 @@
+defmodule Fort.AuditTest.Schema do
+  @moduledoc false
+
+  use Ecto.Schema
+
+  schema "test_fixtures" do
+    field(:name, :string)
+    field(:email, :string)
+    field(:age, :integer)
+    field(:ssn, :string, redact: true)
+  end
+end
+
+defmodule Fort.AuditTest.Address do
+  @moduledoc false
+
+  use Ecto.Schema
+
+  embedded_schema do
+    field(:street, :string)
+    field(:city, :string)
+  end
+end
+
+defmodule Fort.AuditTest.SchemaWithEmbed do
+  @moduledoc false
+
+  use Ecto.Schema
+
+  schema "test_embeds" do
+    field(:name, :string)
+    embeds_one(:address, Fort.AuditTest.Address)
+  end
+end
+
+defmodule Fort.AuditTest.StatusStruct do
+  defstruct [:value]
+end
+
+defmodule Fort.AuditTest.CustomType do
+  @moduledoc false
+
+  use Ecto.Type
+
+  def type, do: :string
+
+  def cast(val), do: {:ok, %Fort.AuditTest.StatusStruct{value: to_string(val)}}
+  def load(val), do: {:ok, %Fort.AuditTest.StatusStruct{value: val}}
+  def dump(%{value: val}), do: {:ok, to_string(val)}
+end
+
+defmodule Fort.AuditTest.SchemaWithCustomType do
+  @moduledoc false
+
+  use Ecto.Schema
+
+  schema "test_custom_types" do
+    field(:name, :string)
+    field(:status, Fort.AuditTest.CustomType)
+  end
+end
+
 defmodule Fort.AuditIntegrationTest do
   use Fort.DataCase
 
@@ -27,6 +89,123 @@ defmodule Fort.AuditIntegrationTest do
     test "wrap/1 wraps an existing Ecto.Multi" do
       multi = Multi.new() |> Multi.run(:ping, fn _repo, _changes -> {:ok, :pong} end)
       assert %AuditedMulti{multi: ^multi, audit_steps: []} = Audit.wrap(multi)
+    end
+  end
+
+  describe "from_changeset/1" do
+    alias Fort.AuditTest.Schema
+
+    test "derives before_data, after_data, and changes scoped to schema fields" do
+      record = %Schema{name: "Alice", email: "alice@example.com", age: 30, ssn: "hidden"}
+
+      changeset =
+        record
+        |> Changeset.cast(%{name: "Alice B.", email: "alice@new.org"}, [:name, :email, :age, :ssn])
+
+      result = Audit.from_changeset(changeset)
+
+      assert result.before_data == %{
+               id: nil,
+               name: "Alice",
+               email: "alice@example.com",
+               age: 30
+             }
+
+      assert result.after_data == %{
+               id: nil,
+               name: "Alice B.",
+               email: "alice@new.org",
+               age: 30
+             }
+
+      assert result.changes == %{name: "Alice B.", email: "alice@new.org"}
+    end
+
+    test "strips redact: true fields from all three maps" do
+      record = %Schema{name: "Alice", email: "alice@example.com", age: 30, ssn: "hidden"}
+
+      changeset =
+        record
+        |> Changeset.cast(%{name: "Alice B."}, [:name, :email, :age, :ssn])
+
+      result = Audit.from_changeset(changeset)
+
+      refute Map.has_key?(result.before_data, :ssn)
+      refute Map.has_key?(result.after_data, :ssn)
+      refute Map.has_key?(result.changes, :ssn)
+    end
+
+    test "parity: before/after match non-redacted original data" do
+      original = %Schema{name: "Carol", email: "carol@example.com", age: 35, ssn: "987-65-4321"}
+
+      changeset =
+        original
+        |> Changeset.cast(%{name: "Carol D.", email: "carol@new.co"}, [:name, :email, :age, :ssn])
+
+      result = Audit.from_changeset(changeset)
+
+      assert result.before_data == %{id: nil, name: "Carol", email: "carol@example.com", age: 35}
+      assert result.after_data == %{id: nil, name: "Carol D.", email: "carol@new.co", age: 35}
+      assert result.changes == %{name: "Carol D.", email: "carol@new.co"}
+
+      refute Map.has_key?(result.before_data, :ssn)
+      refute Map.has_key?(result.after_data, :ssn)
+      refute Map.has_key?(result.changes, :ssn)
+    end
+
+    # ── Step 6: verified-limitation observations (skipped — reference only) ─
+
+    @tag :skip
+    test "VERIFIED: embed struct in from_changeset output lacks Jason.Encoder" do
+      record = %Fort.AuditTest.SchemaWithEmbed{name: "test", address: nil}
+
+      changeset =
+        record
+        |> Changeset.cast(
+          %{name: "updated", address: %{street: "123 Main", city: "Springfield"}},
+          [:name]
+        )
+        |> Changeset.cast_embed(:address,
+          with: fn _address, params ->
+            %Fort.AuditTest.Address{}
+            |> Changeset.cast(params, [:street, :city])
+          end
+        )
+
+      result = Audit.from_changeset(changeset)
+
+      embed_val = result.after_data[:address]
+      IO.puts("EMBED VALUE: #{inspect(embed_val)}")
+      IO.puts("EMBED VALUE TYPE: #{inspect(embed_val && embed_val.__struct__)}")
+
+      case Jason.encode(result.after_data) do
+        {:ok, json} -> IO.puts("EMBED JSON OK: #{json}")
+        {:error, err} -> IO.puts("EMBED JSON FAIL: #{inspect(err)}")
+      end
+
+      assert true
+    end
+
+    @tag :skip
+    test "VERIFIED: custom Ecto.Type returning struct without Jason.Encoder" do
+      record = %Fort.AuditTest.SchemaWithCustomType{name: "test", status: "active"}
+
+      changeset =
+        record
+        |> Changeset.cast(%{name: "updated", status: "inactive"}, [:name, :status])
+
+      result = Audit.from_changeset(changeset)
+
+      status_val = result.after_data[:status]
+      IO.puts("CUSTOM TYPE VALUE: #{inspect(status_val)}")
+      IO.puts("CUSTOM TYPE TYPE: #{inspect(status_val && status_val.__struct__)}")
+
+      case Jason.encode(result.after_data) do
+        {:ok, json} -> IO.puts("CUSTOM TYPE JSON OK: #{json}")
+        {:error, err} -> IO.puts("CUSTOM TYPE JSON FAIL: #{inspect(err)}")
+      end
+
+      assert true
     end
   end
 

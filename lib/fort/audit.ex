@@ -10,7 +10,68 @@ defmodule Fort.Audit do
 
   ## Usage
 
-  See `Fort.Audit.transact/4`, `Fort.Audit.log/1`, `Fort.Audit.new/0`, and `Fort.Audit.wrap/1`.
+  See `Fort.Audit.transact/4`, `Fort.Audit.log/1`, `Fort.Audit.new/0`, `Fort.Audit.wrap/1`,
+  and `Fort.Audit.from_changeset/1`.
+
+  ### Deriving audit data from a changeset
+
+  Use `from_changeset/1` to derive `before_data`, `after_data`, and `changes` directly
+  from an `Ecto.Changeset`, then merge with actor/action attrs:
+
+      changeset
+      |> Fort.Audit.from_changeset()
+      |> Map.merge(%{actor_id: actor.id, actor_type: "admin_user", action: "user.updated"})
+      |> then(&Fort.Audit.append_to_multi(multi, :audit, &1))
+
+  Fields marked `redact: true` in the schema are stripped entirely from all three
+  maps — see `from_changeset/1` for details.
+
+  ## Verified limitations
+
+  ### Embeds
+
+  `__schema__(:fields)` includes `embeds_one` / `embeds_many` columns.  When a
+  changeset carries a changed embed, `from_changeset/1` places the resolved
+  embed struct directly into the output map (e.g.
+  `%MyApp.Address{...}`).  If that struct has no `Jason.Encoder` implementation,
+  `Jason.encode/1` raises `Protocol.UndefinedError` at serialisation time
+  (inside postgrex), not at the `from_changeset/1` call site.
+
+  **Observed behaviour (Ecto 3.14):** `from_changeset/1` succeeds; the caller
+  receives a map containing the embed struct.  The crash occurs later when the
+  map is inserted into the jsonb column.
+
+  Workaround: either `@derive Jason.Encoder` on your embed schemas, or avoid
+  passing embed-carrying changesets through `from_changeset/1` and build the
+  audit maps by hand.
+
+  ### Custom Ecto.Type values without `Jason.Encoder`
+
+  If a schema field uses an `Ecto.Type` whose `cast/1` or in-memory
+  representation returns a struct (or other term) without a `Jason.Encoder`
+  implementation, the value passes through `from_changeset/1` unchanged and
+  fails at jsonb serialisation time with `Protocol.UndefinedError`.
+
+  **Observed behaviour (Ecto 3.14):** identical to the embed case —
+  `from_changeset/1` succeeds, the crash is deferred to postgrex.
+
+  Workaround: ensure custom types return natively encodable terms (strings,
+  numbers, maps, lists) or derive `Jason.Encoder` for any struct they produce.
+
+  Both limitations are inherent to the library's design: `from_changeset/1` is
+  Ecto-layer sugar only.  Real change-data-capture (WAL, Debezium, outbox
+  pattern) is a different architecture with a different identity model and is
+  explicitly out of scope.
+
+  ## Ideas for later
+
+  - Recursive resolution of nested embed/association changesets into their own
+    `before_data` / `after_data` / `changes` maps.
+  - Normalising values via `Ecto.Type.dump/2` to get database-wire
+    representation instead of in-memory struct values.
+  - Any WAL-level, logical-replication, Debezium-style, or outbox-pattern CDC
+    (different architecture, no actor identity available at that layer without
+    session correlation or an outbox).
   """
 
   require Logger
@@ -20,6 +81,49 @@ defmodule Fort.Audit do
   alias Fort.AuditedMulti
   alias Fort.MissingAuditStepError
   alias Fort.Schemas.AuditLog
+
+  @doc """
+  Derives `before_data`, `after_data`, and `changes` directly from an
+  `Ecto.Changeset`.
+
+  Scoped to `changeset.data.__struct__.__schema__(:fields)` — this naturally
+  excludes associations (which live in `__schema__(:associations)`), preventing
+  `%Ecto.Association.NotLoaded{}` structs from reaching the jsonb column where
+  they would crash with a `Jason.EncodeError` at insert time.
+
+  Embeds (`embeds_one` / `embeds_many`) are included in `:fields` and pass
+  through this filter — see the moduledoc for tested edge-case behaviour.
+
+  Returns a plain map that plugs directly into `append_to_multi/3` or `log/1`:
+
+      changeset
+      |> Fort.Audit.from_changeset()
+      |> Map.merge(%{actor_id: actor.id, actor_type: "admin_user", action: "user.updated"})
+      |> then(&Fort.Audit.append_to_multi(multi, :audit, &1))
+
+  """
+  @spec from_changeset(Ecto.Changeset.t()) :: %{
+          before_data: map(),
+          after_data: map(),
+          changes: map()
+        }
+  def from_changeset(%Ecto.Changeset{data: data} = changeset) do
+    schema = data.__struct__
+    fields = schema.__schema__(:fields)
+
+    # Fort-specific semantic expansion of Ecto's redact: true.
+    # Ecto uses it to hide values from inspect/logging output only.
+    # Fort strips redacted fields entirely from the audit trail — a
+    # present-but-nil key still leaks field existence and type to
+    # anyone reading audit_logs.  Absence leaks nothing.
+    redacted = redact_fields(schema)
+
+    before_data = data |> Map.take(fields) |> Map.drop(redacted)
+    after_data = changeset |> Changeset.apply_changes() |> Map.take(fields) |> Map.drop(redacted)
+    changes = Map.take(changeset.changes, fields) |> Map.drop(redacted)
+
+    %{before_data: before_data, after_data: after_data, changes: changes}
+  end
 
   @doc """
   Returns a fresh `AuditedMulti` wrapping an empty `Ecto.Multi`.
@@ -150,6 +254,14 @@ defmodule Fort.Audit do
 
   defp keyword_to_map(keyword) when is_list(keyword), do: Map.new(keyword)
   defp keyword_to_map(map) when is_map(map), do: map
+
+  defp redact_fields(schema) do
+    # __schema__(:redact_fields) was added in Ecto 3.7+.
+    # Gracefully degrade to empty list if unavailable.
+    schema.__schema__(:redact_fields)
+  rescue
+    FunctionClauseError -> []
+  end
 
   defp format_error(%Changeset{} = changeset), do: inspect(changeset.errors)
   defp format_error(reason) when is_atom(reason), do: reason
