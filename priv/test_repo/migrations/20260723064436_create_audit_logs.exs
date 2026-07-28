@@ -17,13 +17,12 @@ defmodule Fort.Repo.Migrations.CreateAuditLogs do
       add :subject_reference, :string
 
       add :action, :string, null: false
+      add :scope_type, :string
+      add :scope_id, :string
       add :category, :string
       add :description, :string
 
       add :outcome, :string, null: false
-
-      add :profile_id, :string
-      add :organization_id, :string
 
       add :before_data, :map, default: fragment("'{}'::jsonb")
       add :after_data, :map, default: fragment("'{}'::jsonb")

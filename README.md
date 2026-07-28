@@ -168,6 +168,8 @@ end)
 | `subject_name` | string | no | Human-readable subject name |
 | `subject_reference` | string | no | External reference code |
 | `action` | string | yes | Dot-notation action name (e.g. "user.created") |
+| `scope_type` | string | no | Type of scoping entity (e.g. "organization", "tenant", "workspace") | 
+| `scope_id` | string | no | ID of the scoping entity |
 | `category` | string | no | Domain category |
 | `description` | string | no | Human-readable summary |
 | `outcome` | string | yes | "success" or "failure" |
