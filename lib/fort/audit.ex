@@ -1,97 +1,66 @@
 defmodule Fort.Audit do
   @moduledoc """
-  Atomic audit logging with a structured Logger emission.
+  Atomic audit logging with dual routing: persists to PostgreSQL and emits
+  structured JSON via `:logger`.
 
-  ## Invariant
+  ## Two paths
 
-  The persisted `audit_logs` PostgreSQL row is atomic with the business
-  transaction — this is enforced via `AuditedMulti` / `transact/4`.
-  Logger emission provides a **secondary audit record** for paths where
-  strict DB-level atomicity isn't required.  It is not a projection of
-  the database row — both are independent audit artifacts with different
-  guarantees.
-
-  The `transact/4` path enforces DB atomicity; the Logger line adds a
-  structured record consumable by log aggregators, SIEMs, and other
-  downstream sinks independently of the database.
-
-  Log emission is handled by `Fort.Audit.Emitter`.  Each committed
-  row is emitted synchronously and its `emitted_at` timestamp is
-  stamped.  This is **at-least-once**: a crash between the Logger call
-  and the DB stamp may cause re-emission on restart.  The `emitted_at`
-  column also serves as a bookmark for downstream consumers — rows where
-  `emitted_at IS NULL` have not yet been processed by Fort.
+  - **Transactional** (`transact/4`) — audit row committed atomically with
+    business steps inside an `Ecto.Multi`. Logger emission is secondary.
+  - **Standalone** (`log/1`) — single audit insert outside a Multi. Logger
+    emission is synchronous with the DB write.
 
   ## Configuration
-
-  Set the Ecto repo in `config/config.exs`:
 
       config :fort, :repo, MyApp.Repo
 
   ## Usage
 
-  See `Fort.Audit.transact/4`, `Fort.Audit.log/1`, `Fort.Audit.new/0`, `Fort.Audit.wrap/1`,
-  and `Fort.Audit.from_changeset/1`.
+  ### Existing Multi
 
-  ### Deriving audit data from a changeset
+  Use `wrap/1` to attach audit to an already-assembled `Ecto.Multi`:
 
-  Use `from_changeset/1` to derive `before_data`, `after_data`, and `changes` directly
-  from an `Ecto.Changeset`, then merge with actor/action attrs:
+      Multi.new()
+      |> Multi.insert(:user, user_changeset)
+      |> Fort.Audit.wrap()
+      |> Fort.Audit.append_to_multi(:audit, %{
+        actor_id: actor.id,
+        actor_type: "admin_user",
+        action: "user.created"
+      })
+      |> Fort.Audit.transact("user.created", actor.id)
 
-      changeset
-      |> Fort.Audit.from_changeset()
-      |> Map.merge(%{actor_id: actor.id, actor_type: "admin_user", action: "user.updated"})
-      |> then(&Fort.Audit.append_to_multi(multi, :audit, &1))
+  ### Greenfield
 
-  Fields marked `redact: true` in the schema are stripped entirely from all three
-  maps — see `from_changeset/1` for details.
+  Use `new/0` when starting from scratch:
 
-  ## Verified limitations
+      Fort.Audit.new()
+      |> then(fn %Fort.AuditedMulti{multi: multi} ->
+        %{multi | multi: Multi.insert(multi, :org, org_changeset)}
+      end)
+      |> Fort.Audit.append_to_multi(:audit, %{
+        actor_id: actor.id,
+        actor_type: "admin_user",
+        action: "org.created"
+      })
+      |> Fort.Audit.transact("org.created", actor.id)
 
-  ### Embeds
+  ### Standalone
 
-  `__schema__(:fields)` includes `embeds_one` / `embeds_many` columns.  When a
-  changeset carries a changed embed, `from_changeset/1` places the resolved
-  embed struct directly into the output map (e.g.
-  `%MyApp.Address{...}`).  If that struct has no `Jason.Encoder` implementation,
-  `Jason.encode/1` raises `Protocol.UndefinedError` at serialisation time
-  (inside postgrex), not at the `from_changeset/1` call site.
+  Use `log/1` outside a transaction:
 
-  **Observed behaviour (Ecto 3.14):** `from_changeset/1` succeeds; the caller
-  receives a map containing the embed struct.  The crash occurs later when the
-  map is inserted into the jsonb column.
+      Fort.Audit.log(%{
+        actor_id: actor.id,
+        actor_type: "admin_user",
+        action: "user.registration.rejected",
+        outcome: "failure",
+        metadata: %{reason: reason}
+      })
 
-  Workaround: either `@derive Jason.Encoder` on your embed schemas, or avoid
-  passing embed-carrying changesets through `from_changeset/1` and build the
-  audit maps by hand.
+  ## Notes
 
-  ### Custom Ecto.Type values without `Jason.Encoder`
-
-  If a schema field uses an `Ecto.Type` whose `cast/1` or in-memory
-  representation returns a struct (or other term) without a `Jason.Encoder`
-  implementation, the value passes through `from_changeset/1` unchanged and
-  fails at jsonb serialisation time with `Protocol.UndefinedError`.
-
-  **Observed behaviour (Ecto 3.14):** identical to the embed case —
-  `from_changeset/1` succeeds, the crash is deferred to postgrex.
-
-  Workaround: ensure custom types return natively encodable terms (strings,
-  numbers, maps, lists) or derive `Jason.Encoder` for any struct they produce.
-
-  Both limitations are inherent to the library's design: `from_changeset/1` is
-  Ecto-layer sugar only.  Real change-data-capture (WAL, Debezium, outbox
-  pattern) is a different architecture with a different identity model and is
-  explicitly out of scope.
-
-  ## Ideas for later
-
-  - Recursive resolution of nested embed/association changesets into their own
-    `before_data` / `after_data` / `changes` maps.
-  - Normalising values via `Ecto.Type.dump/2` to get database-wire
-    representation instead of in-memory struct values.
-  - Any WAL-level, logical-replication, Debezium-style, or outbox-pattern CDC
-    (different architecture, no actor identity available at that layer without
-    session correlation or an outbox).
+  Logger emission is **at-least-once** — a crash between the Logger call and
+  the `emitted_at` DB stamp may cause re-emission on restart.
   """
 
   require Logger

@@ -1,4 +1,11 @@
 defmodule Fort.MissingAuditStepError do
+  @moduledoc """
+  Raised by `transact/4` when the `AuditedMulti` has zero audit steps.
+
+  Every transaction must carry at least one audit step added via
+  `append_to_multi/3`.
+  """
+
   defexception [:message]
 
   @impl true

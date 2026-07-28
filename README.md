@@ -1,12 +1,6 @@
 # Fort
 
-Drop-in, atomic audit logging for Elixir/Phoenix applications. Wrap existing `Ecto.Multi` at call site. No rewiring business logic, no new type to thread through helpers. Persists audit trail to PostgreSQL and emits structured JSON via `:logger`.
-
-## Invariant
-
-> **A business transaction can never be reported as complete (`{:ok, _}`) unless its audit trail is also complete, written atomically with it.**
-
-This is enforced by the type system at the `Fort.Audit.transact/4` boundary: only an `AuditedMulti` with at least one audit step can be passed to it. A bare `Ecto.Multi` causes a `FunctionClauseError`; an `AuditedMulti` with zero audit steps raises `MissingAuditStepError`.
+Drop-in, atomic audit logging for Elixir/Phoenix applications. Persists audit trail to PostgreSQL and emits structured JSON via `:logger`. Business transactions and their audit records are always committed atomically — enforced at the `transact/4` boundary by the `AuditedMulti` type.
 
 ## Installation
 
@@ -26,7 +20,7 @@ Configure the Ecto repo in `config/config.exs`:
 config :fort, :repo, MyApp.Repo
 ```
 
-> **Note:** `Fort.Application` reads `:repo` at boot. If it's unconfigured, the host app will crash on startup, not on first audit call — this is intentional fail-fast behavior.
+> **Note:** `Fort.Application` reads `:repo` at boot. If unconfigured, the host app crashes on startup — intentional fail-fast behavior.
 
 Install and run the migration to create the `audit_logs` table:
 
@@ -35,18 +29,16 @@ mix fort.install
 mix ecto.migrate
 ```
 
-## Two paths, different guarantees
+## Two paths
 
-- **Transactional** (`transact/4`): DB audit row is atomic with business steps. Logger is a secondary record, emitted after commit.
-- **Logger-only** (`log/1`): No DB atomicity needed. Useful for pre-Multi validation failures, non-transactional code, or anywhere the DB audit is optional.
+- **Transactional** (`transact/4`): DB audit row is atomic with business steps. Logger emission is secondary, after commit.
+- **Standalone** (`log/1`): Single insert outside a transaction. Useful for pre-Multi validation failures or non-transactional code.
 
-Choose `transact/4` when you need **"DB audit succeeds ⇔ business step succeeds"**. Choose `log/1` when the DB audit is a best-effort supplement to the Logger record.
-
-## Canonical usage
+## Usage
 
 ### Existing Multi (wrap at the end)
 
-When business steps are already assembled on a bare `Ecto.Multi`:
+Attach audit to an already-assembled `Ecto.Multi` by wrapping it right before `transact/4`:
 
 ```elixir
 multi =
@@ -69,14 +61,9 @@ multi
 |> Fort.Audit.transact("user.created", actor.id, actor_type: "admin_user")
 ```
 
-Key points:
-
-- **Business steps stay on bare `Ecto.Multi`** — no need to thread an `AuditedMulti` through every helper.
-- **Wrapping happens at the end**, right before audit is attached. `Fort.Audit.wrap/1` creates an `AuditedMulti` with zero audit steps.
-- **`Fort.Audit.append_to_multi/3`** appends the audit step and records the step name — now the `AuditedMulti` is executable.
-- **`Fort.Audit.transact/4`** runs the Multi, writes a failure audit on error, and returns `{:error, {:audit_failed, ...}}` if the failure-audit itself fails.
-
 ### Greenfield (no existing Multi)
+
+Start from scratch with `new/0`. Business steps are added by destructuring the `.multi` field:
 
 ```elixir
 Fort.Audit.new()
@@ -94,8 +81,6 @@ end)
 })
 |> Fort.Audit.transact("organization.created", actor.id, actor_type: "admin_user")
 ```
-
-`Fort.Audit.new/0` wraps an empty `Ecto.Multi` in an `AuditedMulti`. Business steps are added by destructuring the `.multi` field and rebuilding the struct.
 
 ### Standalone log (no Multi)
 
@@ -121,7 +106,7 @@ end
 
 ### Audited procedural (inside Repo.transaction)
 
-For simple state transitions inside `Repo.transaction(fn -> ... end)`:
+For state transitions inside `Repo.transaction(fn -> ... end)`:
 
 ```elixir
 def execute(settlement_id, attrs) do
@@ -143,8 +128,6 @@ def execute(settlement_id, attrs) do
 end
 ```
 
-If `Fort.Audit.log/1` returns `{:error, _}`, the `fn ->` returns `{:error, changeset}`, which rolls back the transaction — natural fail-closed without needing `Repo.rollback`.
-
 ### Dynamic attrs from accumulated changes
 
 ```elixir
@@ -164,7 +147,7 @@ end)
 
 ### Deriving before/after/changes from a changeset
 
-Instead of hand-building `before_data`/`after_data`/`changes` maps, use `Fort.Audit.from_changeset/1` to derive them directly from an `Ecto.Changeset`:
+Derive `before_data`, `after_data`, and `changes` from an `Ecto.Changeset`. Fields marked `redact: true` are stripped entirely:
 
 ```elixir
 changeset
@@ -173,47 +156,29 @@ changeset
 |> then(&Fort.Audit.append_to_multi(multi, :audit, &1))
 ```
 
-Fields marked `redact: true` in your Ecto schema are stripped entirely from all three maps — no masking, no placeholders. See `Fort.Audit.from_changeset/1` for details.
-
 ## Schema
+
+No foreign keys — audit records survive entity deletion. All IDs are plain strings.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `actor_id` | string | yes | Who performed the action |
-| `actor_type` | string | yes | Type of actor (e.g. "admin_user", "system") |
-| `actor_name` | string | no | Human-readable name |
-| `actor_identifier` | string | no | Contact/identifier (e.g. email) |
+| `actor_type` | string | yes | Type of actor |
 | `subject_id` | string | no | What the action was performed on |
-| `subject_type` | string | no | Type of subject (e.g. "user", "settlement") |
-| `subject_name` | string | no | Human-readable subject name |
-| `subject_reference` | string | no | External reference code |
-| `action` | string | yes | Dot-notation action name (e.g. "user.created") |
-| `scope_type` | string | no | Type of scoping entity (e.g. "organization", "tenant", "workspace") | 
-| `scope_id` | string | no | ID of the scoping entity |
-| `category` | string | no | Domain category |
-| `description` | string | no | Human-readable summary |
+| `subject_type` | string | no | Type of subject |
+| `action` | string | yes | Dot-notation action name |
 | `outcome` | string | yes | "success" or "failure" |
-| `profile_id` | string | no | Associated profile ID |
-| `organization_id` | string | no | Associated organization ID |
 | `before_data` | jsonb | no | State before the action |
 | `after_data` | jsonb | no | State after the action |
 | `changes` | jsonb | no | Summary of changes |
-| `metadata` | jsonb | no | Extra context (source IP, error details, etc.) |
-
-No foreign keys — audit records survive entity deletion. All IDs are plain strings.
+| `metadata` | jsonb | no | Extra context |
+| `category` | string | no | Domain category |
+| `description` | string | no | Human-readable summary |
+| `scope_type` | string | no | Scoping entity type |
+| `scope_id` | string | no | Scoping entity ID |
 
 ## Guardrails
 
-- **Bare `Ecto.Multi`** passed to `transact/4` raises `FunctionClauseError` — you must wrap it with `Fort.Audit.wrap/1` first.
+- **Bare `Ecto.Multi`** passed to `transact/4` raises `FunctionClauseError` — must wrap with `Fort.Audit.wrap/1` first.
 - **Zero audit steps** raises `MissingAuditStepError` — every transaction must carry at least one audit.
-- **On Multi failure**, a failure audit is automatically written. If the failure-audit itself fails, returns `{:error, {:audit_failed, reason, audit_errors}}`.
-- **On success**, the audit log is committed atomically with business steps — no way to have a successful business outcome without a persisted audit record.
-
-## Dual routing
-
-Every audit log entry is:
-
-1. **Persisted** to the `audit_logs` PostgreSQL table
-2. **Emitted** via `Logger.info` (success) or `Logger.error` (failure) as structured metadata
-
-This enables SIEM integration, log aggregation, and real-time monitoring without additional infrastructure.
+- **On Multi failure**, a failure audit is written automatically. If the failure-audit itself fails, returns `{:error, {:audit_failed, reason, audit_errors}}`.
