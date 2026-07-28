@@ -1,12 +1,10 @@
 defmodule Fort.AuditedMulti do
   @moduledoc """
-  Opaque wrapper around `Ecto.Multi` that tracks audit step presence.
+  Opaque wrapper around `Ecto.Multi` that enforces audit step presence.
 
   Only an `AuditedMulti` with at least one audit step can be passed to
-  `Fort.Audit.transact/4`.  The struct is intentionally minimal:
-  business steps are added to the underlying `Ecto.Multi` directly via
-  the `multi` field (or via the standard `Ecto.Multi.*` pipe before
-  wrapping with `Fort.Audit.wrap/1`).
+  `Fort.Audit.transact/4`. Business steps are added to the underlying
+  `Ecto.Multi` via the `multi` field or standard `Ecto.Multi.*` pipes.
   """
 
   @enforce_keys [:multi]

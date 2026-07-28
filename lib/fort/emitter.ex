@@ -2,11 +2,9 @@ defmodule Fort.Audit.Emitter do
   @moduledoc """
   Synchronous Logger emission for committed audit log rows.
 
-  Each row is emitted once and its `emitted_at` timestamp is stamped
-  immediately after emission.  This is **at-least-once**: a crash between
-  the Logger call and the DB stamp may cause re-emission on restart.
-  Downstream consumers should dedupe on `audit_logs.id` if exactly-once
-  processing is required.
+  At-least-once: a crash between the Logger call and the `emitted_at`
+  DB stamp may cause re-emission on restart. Downstream consumers should
+  dedupe on `audit_logs.id` for exactly-once processing.
   """
 
   require Logger
