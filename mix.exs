@@ -6,7 +6,7 @@ defmodule Fort.MixProject do
       app: :fort,
       version: "0.1.0",
       description:
-        "Dual-routed audit logging for Elixir/Phoenix: atomic audit trail + structured JSON logs",
+        "Audit logging for Elixir/Phoenix: atomic audit trail + structured JSON logs",
       package: package(),
       elixir: "~> 1.15",
       start_permanent: Mix.env() == :prod,
