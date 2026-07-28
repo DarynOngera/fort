@@ -23,11 +23,11 @@ defmodule Fort.Schemas.AuditLog do
     :subject_name,
     :subject_reference,
     :action,
+    :scope_type,
+    :scope_id,
     :category,
     :description,
     :outcome,
-    :profile_id,
-    :organization_id,
     :before_data,
     :after_data,
     :changes,
@@ -52,13 +52,12 @@ defmodule Fort.Schemas.AuditLog do
     field(:subject_reference, :string)
 
     field(:action, :string)
+    field(:scope_type, :string)
+    field(:scope_id, :string)
     field(:category, :string)
     field(:description, :string)
 
     field(:outcome, :string)
-
-    field(:profile_id, :string)
-    field(:organization_id, :string)
 
     field(:before_data, :map, default: %{})
     field(:after_data, :map, default: %{})
