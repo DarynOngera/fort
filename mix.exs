@@ -3,9 +3,10 @@ defmodule Fort.MixProject do
 
   def project do
     [
-      app: :fort,
+      app: :fort_audit,
       version: "0.1.0",
-      description: "Audit logging for Elixir/Phoenix: atomic audit trail + structured JSON logs",
+      description:
+        "Atomic audit logging for Elixir/Phoenix: dual-routes to PostgreSQL and structured JSON logs",
       package: package(),
       elixir: "~> 1.15",
       start_permanent: Mix.env() == :prod,
@@ -29,7 +30,7 @@ defmodule Fort.MixProject do
   defp package do
     [
       licenses: ["Apache-2.0"],
-      links: %{"GitHub" => "https://github.com/DarynOngera/fort"},
+      links: %{"GitHub" => "https://github.com/DarynOngera/fort_audit"},
       files: ~w(lib mix.exs README.md LICENSE.md priv/test_repo/migrations)
     ]
   end

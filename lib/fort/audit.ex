@@ -12,8 +12,8 @@ defmodule Fort.Audit do
 
   ## Configuration
 
-      config :fort, :repo, MyApp.Repo
-      config :fort, :logger_label_fields, [:outcome, :action]
+      config :fort_audit, :repo, MyApp.Repo
+      config :fort_audit, :logger_label_fields, [:outcome, :action]
 
   ### `:repo` (required)
 

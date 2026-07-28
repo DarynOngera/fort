@@ -15,7 +15,7 @@ defmodule Fort.DataCase do
   end
 
   setup tags do
-    repo = Application.fetch_env!(:fort, :repo)
+    repo = Application.fetch_env!(:fort_audit, :repo)
 
     pid = Sandbox.start_owner!(repo, shared: not tags[:async])
     on_exit(fn -> Sandbox.stop_owner(pid) end)

@@ -1,7 +1,7 @@
 defmodule Fort.AuditLogDbConstraintTest do
   use Fort.DataCase
 
-  @repo Application.compile_env(:fort, :repo)
+  @repo Application.compile_env(:fort_audit, :repo)
 
   @base_fields "id, inserted_at"
   @base_values "gen_random_uuid(), NOW()"

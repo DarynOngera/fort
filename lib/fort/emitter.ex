@@ -24,7 +24,7 @@ defmodule Fort.Audit.Emitter do
   `:audit_log_id` are excluded from the default — applications with
   genuinely bounded action vocabularies can opt them in explicitly:
 
-      config :fort, :logger_label_fields, [:outcome, :action]
+      config :fort_audit, :logger_label_fields, [:outcome, :action]
   """
 
   require Logger

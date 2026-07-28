@@ -8,7 +8,7 @@ defmodule Mix.Tasks.Fort.Install do
   def run(args) do
     Mix.Task.run("app.start")
 
-    source_dir = Application.app_dir(:fort, "priv/test_repo/migrations")
+    source_dir = Application.app_dir(:fort_audit, "priv/test_repo/migrations")
     target_dir = target_dir(args)
 
     File.mkdir_p!(target_dir)
@@ -34,20 +34,20 @@ defmodule Mix.Tasks.Fort.Install do
 
       1. Configure the Ecto repo in config/config.exs:
 
-           config :fort, :repo, MyApp.Repo
+           config :fort_audit, :repo, MyApp.Repo
 
       2. Run the migration:
 
            mix ecto.migrate
 
-    See https://hex.pm/packages/fort for full documentation.
+    See https://hex.pm/packages/fort_audit for full documentation.
     """)
   end
 
   defp target_dir([dir]), do: dir
 
   defp target_dir(_args) do
-    case Application.fetch_env(:fort, :repo) do
+    case Application.fetch_env(:fort_audit, :repo) do
       {:ok, repo_module} ->
         repo_name = repo_module |> Module.split() |> List.last() |> Macro.underscore()
         "priv/#{repo_name}/migrations"

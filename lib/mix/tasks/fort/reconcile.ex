@@ -14,7 +14,7 @@ defmodule Mix.Tasks.Fort.Reconcile do
 
     Mix.Task.run("app.start")
 
-    repo = Application.fetch_env!(:fort, :repo)
+    repo = Application.fetch_env!(:fort_audit, :repo)
 
     {:ok, count} = Fort.Audit.reconcile(repo, batch_size)
     Mix.shell().info("Reconciled #{count} unemitted audit log(s)")

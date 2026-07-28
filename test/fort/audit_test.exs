@@ -73,7 +73,7 @@ defmodule Fort.AuditIntegrationTest do
   alias Fort.Audit.Emitter
   alias Fort.Schemas.AuditLog
 
-  @repo Application.compile_env(:fort, :repo)
+  @repo Application.compile_env(:fort_audit, :repo)
 
   @valid_attrs %{
     actor_id: "123e4567-e89b-12d3-a456-426614174000",

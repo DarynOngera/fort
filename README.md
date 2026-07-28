@@ -4,12 +4,12 @@ Drop-in, atomic audit logging for Elixir/Phoenix applications. Persists audit tr
 
 ## Installation
 
-Add `fort` to your `mix.exs`:
+Add `fort_audit` to your `mix.exs`:
 
 ```elixir
 def deps do
   [
-    {:fort, "~> 0.1"}
+    {:fort_audit, "~> 0.1"}
   ]
 end
 ```
@@ -17,7 +17,7 @@ end
 Configure the Ecto repo in `config/config.exs`:
 
 ```elixir
-config :fort, :repo, MyApp.Repo
+config :fort_audit, :repo, MyApp.Repo
 ```
 
 > **Note:** `Fort.Application` reads `:repo` at boot. If unconfigured, the host app crashes on startup — intentional fail-fast behavior.
