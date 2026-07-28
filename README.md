@@ -2,6 +2,20 @@
 
 Drop-in, atomic audit logging for Elixir/Phoenix applications. Wrap existing `Ecto.Multi` at call site. No rewiring business logic, no new type to thread through helpers. Persists audit trail to PostgreSQL and emits structured JSON via `:logger`.
 
+## Invariant
+
+> A business transaction can never be reported as complete (`{:ok, _}`) unless its audit trail is also complete, written atomically with it.
+
+This is enforced by the type system at the `Fort.Audit.transact/4` boundary:
+
+| What you pass | What happens |
+|---|---|
+| **`AuditedMulti` with ≥ 1 audit step** |  Runs atomically — business data and audit log commit or rollback together |
+| Bare `Ecto.Multi` |  `FunctionClauseError` — call `Fort.Audit.wrap/1` first |
+| `AuditedMulti` with 0 steps |  `MissingAuditStepError` — at least one audit step required |
+
+On **Multi failure**, a failure audit is written automatically. If that failure-audit itself fails, `transact/4` returns `{:error, {:audit_failed, reason, audit_errors}}`.
+
 ## System Requirements
 
 - **Elixir:** ~> 1.15
@@ -78,20 +92,6 @@ fort/
 Your application only interacts with `Fort.Audit` and `Fort.AuditedMulti` — everything else is internal.
 
 ## Key Concepts
-
-### Atomicity Invariant
-
-> A business transaction can never be reported as complete (`{:ok, _}`) unless its audit trail is also complete, written atomically with it.
-
-This is enforced by the type system at the `Fort.Audit.transact/4` boundary:
-
-| What you pass | What happens |
-|---|---|
-| **`AuditedMulti` with ≥ 1 audit step** | ✅ Runs atomically — business data and audit log commit or rollback together |
-| Bare `Ecto.Multi` | ❌ `FunctionClauseError` — call `Fort.Audit.wrap/1` first |
-| `AuditedMulti` with 0 steps | ❌ `MissingAuditStepError` — at least one audit step required |
-
-On **Multi failure**, a failure audit is written automatically. If that failure-audit itself fails, `transact/4` returns `{:error, {:audit_failed, reason, audit_errors}}`.
 
 ### Three Building Blocks
 
