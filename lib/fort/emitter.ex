@@ -20,9 +20,10 @@ defmodule Fort.Audit.Emitter do
   `"failure"`, matching the field shape used by earlier versions of
   `Fort.Audit`.
 
-  Returns `:ok`.
+  Returns `{:ok, updated_audit_log}` where the returned struct has
+  `emitted_at` populated.
   """
-  @spec emit_and_stamp(Ecto.Repo.t(), AuditLog.t()) :: :ok
+  @spec emit_and_stamp(Ecto.Repo.t(), AuditLog.t()) :: {:ok, AuditLog.t()}
   def emit_and_stamp(repo, %AuditLog{outcome: outcome} = audit_log) do
     log_level = if outcome == "success", do: :info, else: :error
 
@@ -41,10 +42,11 @@ defmodule Fort.Audit.Emitter do
 
     now = DateTime.utc_now()
 
-    audit_log
-    |> Ecto.Changeset.change(emitted_at: now)
-    |> repo.update!()
+    {:ok, updated} =
+      audit_log
+      |> Ecto.Changeset.change(emitted_at: now)
+      |> repo.update()
 
-    :ok
+    {:ok, updated}
   end
 end
