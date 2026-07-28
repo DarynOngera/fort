@@ -6,6 +6,7 @@ defmodule Fort.Audit do
 
   The persisted `audit_logs` PostgreSQL row is atomic with the business
   transaction — this is enforced via `AuditedMulti` / `transact/4`.
+<<<<<<< HEAD
   Logger emission provides a **secondary audit record** for paths where
   strict DB-level atomicity isn't required.  It is not a projection of
   the database row — both are independent audit artifacts with different
@@ -16,6 +17,15 @@ defmodule Fort.Audit do
   downstream sinks independently of the database.
 
   Log emission is handled by `Fort.Audit.Emitter`.  Each committed
+  Logger emission is a **downstream, best-effort projection** of that
+  persisted row.  It is not required to be atomic with the business
+  transaction, may lag, may batch, and its absence or delay is an
+  observability gap, not a compliance violation.
+
+  **Postgres is the single source of truth; Logger output is always
+  derived from it, never written independently of it.**
+
+  Logger emission is handled by `Fort.Audit.Emitter`.  Each committed
   row is emitted synchronously and its `emitted_at` timestamp is
   stamped.  This is **at-least-once**: a crash between the Logger call
   and the DB stamp may cause re-emission on restart.  The `emitted_at`

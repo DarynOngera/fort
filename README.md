@@ -4,11 +4,28 @@ Drop-in, atomic audit logging for Elixir/Phoenix applications. Wrap existing `Ec
 
 ## Invariant
 
-> **A business transaction can never be reported as complete (`{:ok, _}`) unless its audit trail is also complete, written atomically with it.**
+Why this library, it tackles a specific problem: 1:1 audit and transaction records 
 
-This is enforced by the type system at the `Fort.Audit.transact/4` boundary: only an `AuditedMulti` with at least one audit step can be passed to it. A bare `Ecto.Multi` causes a `FunctionClauseError`; an `AuditedMulti` with zero audit steps raises `MissingAuditStepError`.
+> A business transaction can never be reported as complete (`{:ok, _}`) unless its audit trail is also complete, written atomically with it.
 
-## Installation
+This is enforced by the type system at the `Fort.Audit.transact/4` boundary:
+
+| What you pass | What happens |
+|---|---|
+| **`AuditedMulti` with ≥ 1 audit step** |  Runs atomically — business data and audit log commit or rollback together |
+| Bare `Ecto.Multi` |  `FunctionClauseError` — call `Fort.Audit.wrap/1` first |
+| `AuditedMulti` with 0 steps |  `MissingAuditStepError` — at least one audit step required |
+
+On **Multi failure**, a failure audit is written automatically. If that failure-audit itself fails, `transact/4` returns `{:error, {:audit_failed, reason, audit_errors}}`.
+
+## System Requirements
+
+- **Elixir:** ~> 1.15
+- **PostgreSQL:** 12+
+- **Ecto:** ~> 3.14 (via `ecto_sql`)
+- **Hex package manager** (bundled with Elixir)
+
+## Quick Start
 
 Add `fort` to your `mix.exs`:
 
@@ -26,7 +43,7 @@ Configure the Ecto repo in `config/config.exs`:
 config :fort, :repo, MyApp.Repo
 ```
 
-> **Note:** `Fort.Application` reads `:repo` at boot. If it's unconfigured, the host app will crash on startup, not on first audit call — this is intentional fail-fast behavior.
+> **Note:** `Fort.Application` reads `:repo` at boot. If it's unconfigured, the host app will crash on startup, not on first audit call — intentional fail-fast behavior.
 
 Install and run the migration to create the `audit_logs` table:
 
@@ -43,6 +60,64 @@ mix ecto.migrate
 Choose `transact/4` when you need **"DB audit succeeds ⇔ business step succeeds"**. Choose `log/1` when the DB audit is a best-effort supplement to the Logger record.
 
 ## Canonical usage
+That's it. The `audit_logs` table is ready. Now wrap any `Ecto.Multi`:
+
+```elixir
+Multi.new()
+|> Multi.insert(:user, User.changeset(%User{}, user_params))
+|> Fort.Audit.wrap()
+|> Fort.Audit.append_to_multi(:audit, %{
+  actor_id: actor.id,
+  actor_type: "admin_user",
+  action: "user.created"
+})
+|> Fort.Audit.transact("user.created", actor.id, actor_type: "admin_user")
+```
+
+## Project Structure
+
+```
+fort/
+├── lib/
+│   ├── fort.ex                    # Top-level module documentation
+│   ├── fort/
+│   │   ├── application.ex         # OTP startup — reads :repo config
+│   │   ├── audit.ex               # Core API (transact, log, wrap, new, etc.)
+│   │   ├── audited_multi.ex       # AuditedMulti struct (wraps Ecto.Multi + audit steps)
+│   │   ├── missing_audit_step_error.ex  # Error for zero-step transactions
+│   │   ├── schemas/
+│   │   │   └── audit_log.ex       # Ecto schema for audit_logs table
+│   └── mix/tasks/fort/
+│       └── install.ex             # mix fort.install task
+├── config/
+│   ├── config.exs                 # Base config (imports env configs)
+│   ├── dev.exs                    # Dev environment config
+│   └── test.exs                   # Test config (TestRepo, PG connection)
+├── priv/test_repo/migrations/     # Migration template copied by mix fort.install
+├── test/                          # Test suite
+├── mix.exs                        # Project definition
+└── README.md
+```
+
+Your application only interacts with `Fort.Audit` and `Fort.AuditedMulti` — everything else is internal.
+
+## Key Concepts
+
+### Three Building Blocks
+
+1. **`AuditedMulti`** — a wrapper around `Ecto.Multi` that tracks how many audit steps you've added
+2. **`Fort.Audit.append_to_multi/3`** — adds an audit entry (static map or function) to the transaction
+3. **`Fort.Audit.transact/4`** — runs the transaction atomically; on failure, writes a failure audit automatically
+
+### Dual Routing
+
+Every audit log entry goes to two destinations simultaneously:
+1. **PostgreSQL** — `audit_logs` table (persistent, queryable)
+2. **Logger** — `Logger.info` (success) or `Logger.error` (failure) with structured metadata
+
+This enables SIEM integration, log aggregation, and real-time monitoring without additional infrastructure.
+
+## Usage Patterns
 
 ### Existing Multi (wrap at the end)
 
@@ -173,7 +248,7 @@ changeset
 |> then(&Fort.Audit.append_to_multi(multi, :audit, &1))
 ```
 
-Fields marked `redact: true` in your Ecto schema are stripped entirely from all three maps — no masking, no placeholders. See `Fort.Audit.from_changeset/1` for details.
+Fields marked `redact: true` in your Ecto schema are stripped entirely from all three maps — no masking, no placeholders.
 
 ## Schema
 
@@ -188,7 +263,7 @@ Fields marked `redact: true` in your Ecto schema are stripped entirely from all 
 | `subject_name` | string | no | Human-readable subject name |
 | `subject_reference` | string | no | External reference code |
 | `action` | string | yes | Dot-notation action name (e.g. "user.created") |
-| `scope_type` | string | no | Type of scoping entity (e.g. "organization", "tenant", "workspace") | 
+| `scope_type` | string | no | Type of scoping entity (e.g. "organization", "tenant", "workspace") |
 | `scope_id` | string | no | ID of the scoping entity |
 | `category` | string | no | Domain category |
 | `description` | string | no | Human-readable summary |
@@ -202,18 +277,12 @@ Fields marked `redact: true` in your Ecto schema are stripped entirely from all 
 
 No foreign keys — audit records survive entity deletion. All IDs are plain strings.
 
-## Guardrails
+## Troubleshooting
 
-- **Bare `Ecto.Multi`** passed to `transact/4` raises `FunctionClauseError` — you must wrap it with `Fort.Audit.wrap/1` first.
-- **Zero audit steps** raises `MissingAuditStepError` — every transaction must carry at least one audit.
-- **On Multi failure**, a failure audit is automatically written. If the failure-audit itself fails, returns `{:error, {:audit_failed, reason, audit_errors}}`.
-- **On success**, the audit log is committed atomically with business steps — no way to have a successful business outcome without a persisted audit record.
-
-## Dual routing
-
-Every audit log entry is:
-
-1. **Persisted** to the `audit_logs` PostgreSQL table
-2. **Emitted** via `Logger.info` (success) or `Logger.error` (failure) as structured metadata
-
-This enables SIEM integration, log aggregation, and real-time monitoring without additional infrastructure.
+| Symptom | Cause | Fix |
+|---|---|---|
+| App crashes on startup | `:repo` not configured | Add `config :fort, :repo, MyApp.Repo` |
+| `FunctionClauseError` at transact | Passed bare `Ecto.Multi` | Call `Fort.Audit.wrap/1` first |
+| `MissingAuditStepError` | No audit steps added | Call `Fort.Audit.append_to_multi/3` at least once |
+| Audit log not in DB | Migration not run | Run `mix fort.install && mix ecto.migrate` |
+| Logger output missing | Logger level too high | Check `config :logger, level: :info` |
