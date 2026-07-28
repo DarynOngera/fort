@@ -70,6 +70,7 @@ defmodule Fort.AuditIntegrationTest do
   alias Fort.Audit
   alias Fort.AuditedMulti
   alias Fort.MissingAuditStepError
+  alias Fort.Audit.Emitter
   alias Fort.Schemas.AuditLog
 
   @repo Application.compile_env(:fort, :repo)
@@ -477,6 +478,121 @@ defmodule Fort.AuditIntegrationTest do
       assert {:error, :audit, _failed, _changes} = @repo.transaction(audited.multi)
 
       refute @repo.one(AuditLog)
+    end
+  end
+
+  describe "Audit.reconcile/2" do
+    test "re-emits unemitted rows and stamps emitted_at" do
+      Logger.configure(level: :info)
+
+      attrs = %{
+        actor_id: "reconcile-test",
+        actor_type: "system",
+        action: "reconcile.test",
+        outcome: "success"
+      }
+
+      {:ok, row1} = %AuditLog{} |> AuditLog.changeset(attrs) |> @repo.insert()
+      {:ok, row2} = %AuditLog{} |> AuditLog.changeset(attrs) |> @repo.insert()
+
+      assert row1.emitted_at == nil
+      assert row2.emitted_at == nil
+
+      log =
+        capture_log(fn ->
+          assert {:ok, 2} = Audit.reconcile(@repo, 100)
+        end)
+
+      assert log =~ "reconcile.test"
+      assert String.count(log, "reconcile.test") == 2
+
+      refute @repo.get!(AuditLog, row1.id).emitted_at == nil
+      refute @repo.get!(AuditLog, row2.id).emitted_at == nil
+    after
+      Logger.configure(level: :warning)
+    end
+
+    test "is idempotent on second call with no new rows" do
+      Logger.configure(level: :info)
+
+      attrs = %{
+        actor_id: "reconcile-idempotent",
+        actor_type: "system",
+        action: "reconcile.idempotent",
+        outcome: "success"
+      }
+
+      {:ok, row} = %AuditLog{} |> AuditLog.changeset(attrs) |> @repo.insert()
+
+      capture_log(fn ->
+        assert {:ok, 1} = Audit.reconcile(@repo, 100)
+      end)
+
+      log =
+        capture_log(fn ->
+          assert {:ok, 0} = Audit.reconcile(@repo, 100)
+        end)
+
+      refute log =~ "reconcile.idempotent"
+      refute @repo.get!(AuditLog, row.id).emitted_at == nil
+    after
+      Logger.configure(level: :warning)
+    end
+
+    test "metadata split places label fields at top level and body under details" do
+      audit_log = %AuditLog{
+        actor_id: "split-test-actor",
+        actor_type: "system",
+        action: "split.test",
+        outcome: "success",
+        category: "testcat",
+        subject_id: "sub-1",
+        subject_type: "user"
+      }
+
+      label_set = MapSet.new([:outcome, :category])
+      metadata = Emitter.log_metadata(audit_log, label_set)
+
+      top_keys = Keyword.keys(metadata)
+
+      assert :outcome in top_keys
+      assert :category in top_keys
+      refute :actor_id in top_keys
+      refute :actor_type in top_keys
+      refute :subject_id in top_keys
+      refute :subject_type in top_keys
+      refute :audit_log_id in top_keys
+
+      details = metadata[:details]
+      assert details[:actor_id] == "split-test-actor"
+      assert details[:actor_type] == "system"
+      assert details[:subject_id] == "sub-1"
+      assert details[:subject_type] == "user"
+    end
+
+    test "batch_size caps the number of rows processed per call" do
+      Logger.configure(level: :info)
+
+      attrs = %{
+        actor_id: "reconcile-batch",
+        actor_type: "system",
+        action: "reconcile.batch",
+        outcome: "success"
+      }
+
+      {:ok, _r1} = %AuditLog{} |> AuditLog.changeset(attrs) |> @repo.insert()
+      {:ok, _r2} = %AuditLog{} |> AuditLog.changeset(attrs) |> @repo.insert()
+
+      capture_log(fn ->
+        assert {:ok, 1} = Audit.reconcile(@repo, 1)
+      end)
+
+      unemitted_count =
+        @repo.one(from(al in AuditLog, select: count(al.id), where: is_nil(al.emitted_at)))
+
+      assert unemitted_count == 1
+    after
+      Logger.configure(level: :warning)
     end
   end
 end
