@@ -28,8 +28,9 @@ defmodule Fort.MixProject do
 
   defp package do
     [
-      licenses: ["MIT"],
-      links: %{"GitHub" => "https://github.com/DarynOngera/fort"}
+      licenses: ["Apache-2.0"],
+      links: %{"GitHub" => "https://github.com/DarynOngera/fort"},
+      files: ~w(lib mix.exs README.md LICENSE.md priv/test_repo/migrations)
     ]
   end
 
@@ -39,7 +40,8 @@ defmodule Fort.MixProject do
       {:postgrex, ">= 0.0.0"},
       {:jason, "~> 1.2"},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
-      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
+      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
+      {:ex_doc, "~> 0.40", only: :dev, runtime: false, warn_if_outdated: true}
     ]
   end
 
