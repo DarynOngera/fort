@@ -158,7 +158,7 @@ defmodule Fort.Audit do
     updated_multi =
       Multi.run(multi, name, fn repo, changes ->
         attrs = Map.put(attrs_fn.(changes), :outcome, "success")
-        do_log(repo, attrs)
+        insert_only(repo, attrs)
       end)
 
     %{audited | multi: updated_multi, audit_steps: [name | steps]}
@@ -199,6 +199,15 @@ defmodule Fort.Audit do
   end
 
   defp repo, do: :persistent_term.get({:fort, :repo})
+
+  # Insert-only — no Logger emission.  Used inside the transactional path
+  # (append_to_multi/3's Multi.run) where Logger would fire before commit,
+  # producing ghost log lines on rollback.
+  defp insert_only(repo, attrs) do
+    %AuditLog{}
+    |> AuditLog.changeset(attrs)
+    |> repo.insert()
+  end
 
   defp do_log(repo, attrs) do
     %AuditLog{}
