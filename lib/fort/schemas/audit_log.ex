@@ -59,6 +59,8 @@ defmodule Fort.Schemas.AuditLog do
 
     field(:outcome, :string)
 
+    field(:emitted_at, :utc_datetime_usec)
+
     field(:before_data, :map, default: %{})
     field(:after_data, :map, default: %{})
     field(:changes, :map, default: %{})
