@@ -4,6 +4,8 @@ Drop-in, atomic audit logging for Elixir/Phoenix applications. Wrap existing `Ec
 
 ## Invariant
 
+Why this library, it tackles a specific problem: 1:1 audit and transaction records 
+
 > A business transaction can never be reported as complete (`{:ok, _}`) unless its audit trail is also complete, written atomically with it.
 
 This is enforced by the type system at the `Fort.Audit.transact/4` boundary:
