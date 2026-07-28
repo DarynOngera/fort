@@ -1,6 +1,25 @@
 defmodule Fort.Audit do
   @moduledoc """
-  Dual-routed audit logging: persisted to PostgreSQL and emitted as structured JSON via `:logger`.
+  Atomic audit logging with a best-effort Logger projection.
+
+  ## Invariant
+
+  The persisted `audit_logs` PostgreSQL row is atomic with the business
+  transaction — this is enforced via `AuditedMulti` / `transact/4`.
+  Logger emission is a **downstream, best-effort projection** of that
+  persisted row.  It is not required to be atomic with the business
+  transaction, may lag, may batch, and its absence or delay is an
+  observability gap, not a compliance violation.
+
+  **Postgres is the single source of truth; Logger output is always
+  derived from it, never written independently of it.**
+
+  Logger emission is handled by `Fort.Audit.Emitter`.  Each committed
+  row is emitted synchronously and its `emitted_at` timestamp is
+  stamped.  This is **at-least-once**: a crash between the Logger call
+  and the DB stamp may cause re-emission on restart.  The `emitted_at`
+  column also serves as a bookmark for downstream consumers — rows where
+  `emitted_at IS NULL` have not yet been processed by Fort.
 
   ## Configuration
 
@@ -78,8 +97,8 @@ defmodule Fort.Audit do
 
   alias Ecto.Changeset
   alias Ecto.Multi
-  alias Fort.AuditedMulti
   alias Fort.Audit.Emitter
+  alias Fort.AuditedMulti
   alias Fort.MissingAuditStepError
   alias Fort.Schemas.AuditLog
 
@@ -181,15 +200,7 @@ defmodule Fort.Audit do
   def transact(%AuditedMulti{multi: multi, audit_steps: steps}, action, actor_id, opts) do
     case repo().transaction(multi) do
       {:ok, changes} ->
-        # Emit Logger lines for committed audit rows and stamp emitted_at.
-        # This runs outside the Postgres transaction — if it crashes the
-        # audit rows are already durable and will be re-emitted on restart.
-        Enum.each(steps, fn step_name ->
-          if audit_log = Map.get(changes, step_name) do
-            Emitter.emit_and_stamp(repo(), audit_log)
-          end
-        end)
-
+        emit_audit_logs(steps, changes)
         {:ok, changes}
 
       {:error, _op, reason, _changes} ->
@@ -209,6 +220,17 @@ defmodule Fort.Audit do
   end
 
   defp repo, do: :persistent_term.get({:fort, :repo})
+
+  # Emit Logger lines for committed audit rows and stamp emitted_at.
+  # Runs outside the Postgres transaction — if it crashes the audit rows
+  # are already durable and will be re-emitted on restart.
+  defp emit_audit_logs(steps, changes) do
+    Enum.each(steps, fn step_name ->
+      if audit_log = Map.get(changes, step_name) do
+        Emitter.emit_and_stamp(repo(), audit_log)
+      end
+    end)
+  end
 
   # Insert-only — no Logger emission.  Used inside the transactional path
   # (append_to_multi/3's Multi.run) where Logger would fire before commit,
