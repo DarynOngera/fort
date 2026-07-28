@@ -215,6 +215,7 @@ defmodule Fort.AuditIntegrationTest do
       assert audit_log.action == "settlement.generated"
       assert audit_log.actor_id == "123e4567-e89b-12d3-a456-426614174000"
       assert audit_log.actor_type == "admin_user"
+      assert audit_log.emitted_at != nil
     end
 
     test "returns error changeset with missing required fields" do
@@ -260,6 +261,55 @@ defmodule Fort.AuditIntegrationTest do
 
       assert {:ok, %{ping: :pong}} =
                Audit.transact(audited, "test.action", "actor-1", actor_type: "system")
+    end
+
+    test "transact success emits Logger and stamps emitted_at" do
+      Logger.configure(level: :info)
+
+      log =
+        capture_log(fn ->
+          audited =
+            Audit.new()
+            |> Audit.append_to_multi(:audit, @valid_attrs)
+
+          assert {:ok, _changes} =
+                   Audit.transact(audited, "test.action", "actor-1", actor_type: "system")
+        end)
+
+      assert log =~ "settlement.generated"
+
+      audit_log = @repo.one!(AuditLog)
+      assert audit_log.emitted_at != nil
+    after
+      Logger.configure(level: :warning)
+    end
+
+    test "ghost log: business rollback after audit step produces no Logger for rolled-back audit" do
+      Logger.configure(level: :info)
+
+      log =
+        capture_log(fn ->
+          audited =
+            Multi.new()
+            |> Audit.wrap()
+            |> Audit.append_to_multi(:audit, @valid_attrs)
+            |> then(fn %{multi: multi} = a ->
+              %{a | multi: Multi.run(multi, :failer, fn _repo, _changes -> {:error, :ghost} end)}
+            end)
+
+          assert {:error, :ghost} =
+                   Audit.transact(audited, "test.action", "actor-1", actor_type: "system")
+        end)
+
+      # The failure audit was written (log_failure path) — that's expected
+      assert @repo.aggregate(AuditLog, :count, :id) == 1
+      audit_log = @repo.one!(AuditLog)
+      assert audit_log.outcome == "failure"
+
+      # But the success audit's Logger line MUST NOT appear — it was rolled back
+      refute log =~ "settlement.generated"
+    after
+      Logger.configure(level: :warning)
     end
 
     test "writes failure audit when multi fails" do

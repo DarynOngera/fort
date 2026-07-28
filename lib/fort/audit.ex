@@ -224,8 +224,8 @@ defmodule Fort.Audit do
          |> AuditLog.changeset(attrs)
          |> repo.insert() do
       {:ok, %AuditLog{} = audit_log} ->
-        Emitter.emit_and_stamp(repo, audit_log)
-        {:ok, audit_log}
+        {:ok, updated} = Emitter.emit_and_stamp(repo, audit_log)
+        {:ok, updated}
 
       {:error, %Changeset{} = changeset} ->
         Logger.error(fn ->
