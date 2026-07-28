@@ -97,7 +97,7 @@ defmodule Fort.Audit do
   integration concerns best solved by the community or the host app against
   stable `Logger` output.
 
-  ## Reconciliation (`mix fort.reconcile`)
+  ## Reconciliation
 
   Rows that were persisted but never emitted to Logger (e.g., a crash between
   the DB commit and the `emitted_at` stamp) can be recovered via:
@@ -106,7 +106,7 @@ defmodule Fort.Audit do
 
   This queries unemitted rows using the partial index `idx_audit_logs_unemitted`,
   re-emits each via `Logger`, and stamps `emitted_at`. The function
-  `Fort.Audit.Emitter.reconcile/2` is also public for host apps that want to
+  `Fort.Audit.reconcile/2` is also public for host apps that want to
   schedule reconciliation from Oban, Quantum, or a `:timer.send_interval`.
 
   ## At-least-once
@@ -114,7 +114,7 @@ defmodule Fort.Audit do
   Logger emission is **at-least-once** — a crash between the Logger call and
   the `emitted_at` DB stamp may cause re-emission on restart. Downstream
   consumers should dedupe on `audit_logs.id` for exactly-once processing. The
-  `mix fort.reconcile` task is the recovery mechanism for the permanent case
+  mix fort.reconcile task is the recovery mechanism for the permanent case
   (crash before the stamp ever happens).
   """
 
