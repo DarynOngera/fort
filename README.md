@@ -35,6 +35,13 @@ mix fort.install
 mix ecto.migrate
 ```
 
+## Two paths, different guarantees
+
+- **Transactional** (`transact/4`): DB audit row is atomic with business steps. Logger is a secondary record, emitted after commit.
+- **Logger-only** (`log/1`): No DB atomicity needed. Useful for pre-Multi validation failures, non-transactional code, or anywhere the DB audit is optional.
+
+Choose `transact/4` when you need **"DB audit succeeds ⇔ business step succeeds"**. Choose `log/1` when the DB audit is a best-effort supplement to the Logger record.
+
 ## Canonical usage
 
 ### Existing Multi (wrap at the end)
