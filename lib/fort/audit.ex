@@ -3,12 +3,13 @@ defmodule Fort.Audit do
   Atomic audit logging with dual routing: persists to PostgreSQL and emits
   structured JSON via `:logger`.
 
-  ## Two paths
+  ## Three paths
 
-  - **Transactional** (`transact/4`) — audit row committed atomically with
-    business steps inside an `Ecto.Multi`. Logger emission is secondary.
-  - **Standalone** (`log/1`) — single audit insert outside a Multi. Logger
-    emission is synchronous with the DB write.
+  | Function | Guarantee | Cost |
+  |---|---|---|
+  | `audited_transaction/4` / `transact/4` | Atomic — no business success without a durable audit row | Extra insert inside the business transaction |
+  | `log_best_effort/4` | None — audit event can be lost on crash between commit and this call | Zero added cost to the business transaction |
+  | `log/1` | Durable — synchronous DB insert + Logger emission | Standalone write, no transaction |
 
   ## Configuration
 
@@ -33,34 +34,19 @@ defmodule Fort.Audit do
 
   ## Usage
 
-  ### Existing Multi
+  ### Quick start (recommended)
 
-  Use `wrap/1` to attach audit to an already-assembled `Ecto.Multi`:
+  For a single business `Ecto.Multi` with one audit step — the common case:
 
-      Multi.new()
-      |> Multi.insert(:user, user_changeset)
-      |> Fort.Audit.wrap()
-      |> Fort.Audit.append_to_multi(:audit, %{
+      Fort.Audit.audited_transaction(multi, "user.created",
         actor_id: actor.id,
         actor_type: "admin_user",
-        action: "user.created"
-      })
-      |> Fort.Audit.transact("user.created", actor.id)
+        audit_attrs: %{subject_id: user.id, subject_type: "user"}
+      )
 
-  ### Greenfield
-
-  Use `new/0` when starting from scratch:
-
-      Fort.Audit.new()
-      |> then(fn %Fort.AuditedMulti{multi: multi} ->
-        %{multi | multi: Multi.insert(multi, :org, org_changeset)}
-      end)
-      |> Fort.Audit.append_to_multi(:audit, %{
-        actor_id: actor.id,
-        actor_type: "admin_user",
-        action: "org.created"
-      })
-      |> Fort.Audit.transact("org.created", actor.id)
+  Actor identity (`actor_id`, `actor_type`) and `action` are stated exactly once.
+  The audit step is constructed correctly inside — `MissingAuditStepError` is
+  structurally unreachable through this entry point.
 
   ### Standalone
 
@@ -73,6 +59,26 @@ defmodule Fort.Audit do
         outcome: "failure",
         metadata: %{reason: reason}
       })
+
+  ### Advanced: multiple audit steps in one Multi
+
+  When you need more than one audit step inside a single transaction, use
+  `wrap/1`, `append_to_multi/3`, and `transact/4` directly.
+
+  #### Wrapping a Multi (existing or new)
+
+  Build a plain `Ecto.Multi` first, then wrap it — same path whether
+  starting from scratch or wrapping an already-assembled Multi:
+
+      Multi.new()
+      |> Multi.insert(:user, user_changeset)
+      |> Fort.Audit.wrap()
+      |> Fort.Audit.append_to_multi(:audit, %{
+        actor_id: actor.id,
+        actor_type: "admin_user",
+        action: "user.created"
+      })
+      |> Fort.Audit.transact("user.created", actor.id)
 
   ## Logger metadata structure
 
@@ -171,15 +177,17 @@ defmodule Fort.Audit do
   end
 
   @doc """
-  Returns a fresh `AuditedMulti` wrapping an empty `Ecto.Multi`.
-  """
-  @spec new() :: AuditedMulti.t()
-  def new do
-    %AuditedMulti{multi: Multi.new()}
-  end
+  Wraps an `Ecto.Multi` in an `AuditedMulti`.
 
-  @doc """
-  Wraps an existing `Ecto.Multi` in an `AuditedMulti`.
+  Starting from scratch? Build a plain `Ecto.Multi` first and wrap it
+  the same way:
+
+      Ecto.Multi.new()
+      |> Multi.insert(:org, org_changeset)
+      |> Fort.Audit.wrap()
+
+  This is also the entry point for the existing-Multi case — both
+  greenfield and pre-assembled multis use the same path.
   """
   @spec wrap(Ecto.Multi.t()) :: AuditedMulti.t()
   def wrap(%Multi{} = multi) do
@@ -233,6 +241,111 @@ defmodule Fort.Audit do
           :ok -> {:error, reason}
           {:error, audit_error} -> {:error, {:audit_failed, reason, audit_error}}
         end
+    end
+  end
+
+  @doc ~S"""
+  Collapsed entry point for the common case: one business Multi, one audit step.
+
+  Actor identity (`actor_id`, `actor_type`) and `action` are stated exactly once
+  in the call — the `opts` keyword never accepts a second copy. `audit_attrs`
+  carries only extra fields (`subject_id`, `subject_type`, `metadata`, etc.).
+
+  Internally `wrap/1 |> append_to_multi/3 |> transact/4` — `MissingAuditStepError`
+  is structurally unreachable through this path.
+
+  ## Example
+
+      Fort.Audit.audited_transaction(multi, "user.created",
+        actor_id: actor.id,
+        actor_type: "admin_user",
+        audit_attrs: %{subject_id: user.id, subject_type: "user"}
+      )
+
+  ## Failure path
+
+  A failing business step produces the same failure-audit row as `transact/4`,
+  with error formatted via `format_error/1`.
+  """
+  @spec audited_transaction(Ecto.Multi.t(), String.t(), keyword()) ::
+          {:ok, map()} | {:error, term()}
+  def audited_transaction(multi, action, opts \\ []) do
+    actor_id = Keyword.fetch!(opts, :actor_id)
+    actor_type = Keyword.fetch!(opts, :actor_type)
+    audit_attrs = Keyword.get(opts, :audit_attrs, %{}) |> Map.new()
+    transact_opts = Keyword.drop(opts, [:actor_id, :actor_type, :audit_attrs])
+
+    success_attrs =
+      audit_attrs
+      |> Map.merge(%{actor_id: actor_id, actor_type: actor_type, action: action})
+
+    multi
+    |> wrap()
+    |> append_to_multi(:audit, success_attrs)
+    |> transact(action, actor_id, Keyword.put(transact_opts, :actor_type, actor_type))
+  end
+
+  @doc ~S"""
+  Records an audit event after a plain `Repo.transaction/1`, without atomicity.
+
+  Takes the raw `Repo.transaction/1` result as the first argument and writes the
+  appropriate audit row (success or failure) outside the business transaction.
+  Reuses `format_error/1` for failure formatting — identical to `transact/4`'s
+  failure path.
+
+  ## Guarantee gap
+
+  A crash between `Repo.transaction/1` returning `{:ok, _}` and this call
+  executing **permanently loses the audit event**. No row was ever durably
+  written — `mix fort.reconcile` has nothing to recover. Only use this when
+  the business value of the audit event does not justify the latency or lock
+  contention of an extra insert inside the transaction.
+
+  ## Examples
+
+      Repo.transaction(multi)
+      |> Fort.Audit.log_best_effort("user.created", actor.id,
+           actor_type: "admin_user",
+           audit_attrs: %{subject_id: user.id, subject_type: "user"}
+         )
+
+      Repo.transaction(multi)
+      |> Fort.Audit.log_best_effort("user.created", actor.id,
+           actor_type: "admin_user"
+         )
+      # => {:error, :oops}  (failure path)
+  """
+  @spec log_best_effort(
+          {:ok, map()} | {:error, Ecto.Multi.name(), term(), map()},
+          String.t(),
+          String.t(),
+          keyword()
+        ) :: {:ok, map()} | {:error, term()}
+  def log_best_effort(result, action, actor_id, opts \\ [])
+
+  def log_best_effort({:ok, _changes} = result, action, actor_id, opts) do
+    actor_type = Keyword.fetch!(opts, :actor_type)
+    audit_attrs = Keyword.get(opts, :audit_attrs, %{}) |> Map.new()
+
+    attrs =
+      audit_attrs
+      |> Map.merge(%{
+        actor_id: actor_id,
+        actor_type: actor_type,
+        action: action,
+        outcome: "success"
+      })
+
+    case do_log(repo(), attrs) do
+      {:ok, _audit_log} -> result
+      {:error, changeset} -> {:error, changeset}
+    end
+  end
+
+  def log_best_effort({:error, _op, reason, _changes}, action, actor_id, opts) do
+    case log_failure(action, actor_id, opts, reason) do
+      :ok -> {:error, reason}
+      {:error, audit_error} -> {:error, {:audit_failed, reason, audit_error}}
     end
   end
 

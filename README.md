@@ -29,58 +29,31 @@ mix fort.install
 mix ecto.migrate
 ```
 
-## Two paths
+## Three paths
 
-- **Transactional** (`transact/4`): DB audit row is atomic with business steps. Logger emission is secondary, after commit.
-- **Standalone** (`log/1`): Single insert outside a transaction. Useful for pre-Multi validation failures or non-transactional code.
+| Function | Guarantee | Cost |
+|---|---|---|
+| `audited_transaction/4` / `transact/4` | Atomic — no business success without a durable audit row | Extra insert inside the business transaction |
+| `log_best_effort/4` | None — audit event can be lost on crash between commit and this call | Zero added cost to the business transaction |
+| `log/1` | Durable — synchronous DB insert + Logger emission | Standalone write, no transaction |
 
 ## Usage
 
-### Existing Multi (wrap at the end)
+### Quick start (recommended)
 
-Attach audit to an already-assembled `Ecto.Multi` by wrapping it right before `transact/4`:
-
-```elixir
-multi =
-  Multi.new()
-  |> Multi.insert(:user, User.changeset(%User{}, user_params))
-  |> Multi.run(:profile, fn %{user: user} ->
-    Profile.changeset(%Profile{}, %{user_id: user.id})
-    |> Repo.insert()
-  end)
-
-multi
-|> Fort.Audit.wrap()
-|> Fort.Audit.append_to_multi(:audit, %{
-  actor_id: actor.id,
-  actor_type: "admin_user",
-  action: "user.created",
-  subject_id: user.id,
-  subject_type: "user"
-})
-|> Fort.Audit.transact("user.created", actor.id, actor_type: "admin_user")
-```
-
-### Greenfield (no existing Multi)
-
-Start from scratch with `new/0`. Business steps are added by destructuring the `.multi` field:
+For a single business `Ecto.Multi` with one audit step — the common case:
 
 ```elixir
-Fort.Audit.new()
-|> then(fn %Fort.AuditedMulti{multi: multi} ->
-  %{multi |
-    multi: multi
-    |> Multi.insert(:organization, Organization.changeset(%Organization{}, org_params))
-    |> Multi.run(:owner, fn %{organization: org} -> create_owner(org, owner_params) end)
-  }
-end)
-|> Fort.Audit.append_to_multi(:audit, %{
+Fort.Audit.audited_transaction(multi, "user.created",
   actor_id: actor.id,
   actor_type: "admin_user",
-  action: "organization.created"
-})
-|> Fort.Audit.transact("organization.created", actor.id, actor_type: "admin_user")
+  audit_attrs: %{subject_id: user.id, subject_type: "user"}
+)
 ```
+
+Actor identity (`actor_id`, `actor_type`) and `action` are stated exactly once.
+The audit step is constructed correctly inside — `MissingAuditStepError` is
+structurally unreachable through this entry point.
 
 ### Standalone log (no Multi)
 
@@ -89,7 +62,7 @@ For pre-Multi validation failures or non-transactional code paths:
 ```elixir
 case validate_params(params) do
   :ok ->
-    # proceed to Fort.Audit.transact
+    # proceed to Fort.Audit.audited_transaction
 
   {:error, reason} ->
     Fort.Audit.log(%{
@@ -128,10 +101,41 @@ def execute(settlement_id, attrs) do
 end
 ```
 
-### Dynamic attrs from accumulated changes
+### Advanced: multiple audit steps in one Multi
+
+When you need more than one audit step inside a single transaction (e.g. auditing
+two related entities), use the lower-level `wrap/1`, `append_to_multi/3`, and
+`transact/4` directly.
+
+#### Wrapping a Multi (existing or new)
+
+Build a plain `Ecto.Multi` first, then wrap it — same path whether starting from scratch or wrapping an already-assembled Multi:
 
 ```elixir
-Fort.Audit.new()
+multi =
+  Multi.new()
+  |> Multi.insert(:user, User.changeset(%User{}, user_params))
+  |> Multi.run(:profile, fn %{user: user} ->
+    Profile.changeset(%Profile{}, %{user_id: user.id})
+    |> Repo.insert()
+  end)
+
+multi
+|> Fort.Audit.wrap()
+|> Fort.Audit.append_to_multi(:audit, %{
+  actor_id: actor.id,
+  actor_type: "admin_user",
+  action: "user.created",
+  subject_id: user.id,
+  subject_type: "user"
+})
+|> Fort.Audit.transact("user.created", actor.id, actor_type: "admin_user")
+```
+
+#### Dynamic attrs from accumulated changes
+
+```elixir
+Multi.new()
 |> Multi.run(:data, fn _repo, _changes -> {:ok, %{user_id: "user-1"}} end)
 |> Fort.Audit.wrap()
 |> Fort.Audit.append_to_multi(:audit, fn changes ->
@@ -145,7 +149,7 @@ end)
 |> Fort.Audit.transact("test.action", "actor-1", actor_type: "system")
 ```
 
-### Deriving before/after/changes from a changeset
+#### Deriving before/after/changes from a changeset
 
 Derive `before_data`, `after_data`, and `changes` from an `Ecto.Changeset`. Fields marked `redact: true` are stripped entirely:
 
