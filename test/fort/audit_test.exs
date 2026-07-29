@@ -82,14 +82,14 @@ defmodule Fort.AuditIntegrationTest do
     outcome: "success"
   }
 
-  describe "new/0 and wrap/1" do
-    test "new/0 returns an AuditedMulti wrapping an empty Multi" do
-      assert %AuditedMulti{multi: %Multi{}, audit_steps: []} = Audit.new()
-    end
-
+  describe "wrap/1" do
     test "wrap/1 wraps an existing Ecto.Multi" do
       multi = Multi.new() |> Multi.run(:ping, fn _repo, _changes -> {:ok, :pong} end)
       assert %AuditedMulti{multi: ^multi, audit_steps: []} = Audit.wrap(multi)
+    end
+
+    test "wrap/1 is the greenfield entry point too: wrap(Multi.new()) matches wrap of an empty Multi" do
+      assert %AuditedMulti{multi: %Multi{}, audit_steps: []} = Multi.new() |> Audit.wrap()
     end
   end
 
@@ -270,7 +270,8 @@ defmodule Fort.AuditIntegrationTest do
       log =
         capture_log(fn ->
           audited =
-            Audit.new()
+            Multi.new()
+            |> Audit.wrap()
             |> Audit.append_to_multi(:audit, @valid_attrs)
 
           assert {:ok, _changes} =
@@ -342,6 +343,143 @@ defmodule Fort.AuditIntegrationTest do
     end
   end
 
+  describe "audited_transaction/4" do
+    test "parity with three-call chain: same inputs produce same DB state" do
+      multi =
+        Multi.new()
+        |> Multi.run(:ping, fn _repo, _changes -> {:ok, :pong} end)
+
+      assert {:ok, %{ping: :pong}} =
+               Audit.audited_transaction(multi, "test.parity",
+                 actor_id: "actor-parity",
+                 actor_type: "system",
+                 audit_attrs: %{subject_id: "sub-1", subject_type: "user"}
+               )
+
+      assert @repo.aggregate(AuditLog, :count, :id) == 1
+      log = @repo.one!(AuditLog)
+      assert log.action == "test.parity"
+      assert log.actor_id == "actor-parity"
+      assert log.actor_type == "system"
+      assert log.subject_id == "sub-1"
+      assert log.subject_type == "user"
+      assert log.outcome == "success"
+    end
+
+    test "missing required opts raises KeyError" do
+      multi = Multi.new() |> Multi.run(:ping, fn _repo, _changes -> {:ok, :pong} end)
+
+      assert_raise KeyError, fn ->
+        Audit.audited_transaction(multi, "test.noopts", [])
+      end
+    end
+
+    test "failure path writes failure audit with format_error output" do
+      multi =
+        Multi.new()
+        |> Multi.run(:fail, fn _repo, _changes -> {:error, :oops} end)
+
+      assert {:error, :oops} =
+               Audit.audited_transaction(multi, "test.fail",
+                 actor_id: "actor-fail",
+                 actor_type: "system"
+               )
+
+      assert @repo.aggregate(AuditLog, :count, :id) == 1
+      audit_log = @repo.one!(AuditLog)
+      assert audit_log.action == "test.fail"
+      assert audit_log.outcome == "failure"
+      assert audit_log.metadata["error"] == "oops"
+    end
+  end
+
+  describe "log_best_effort/4" do
+    test "success branch: passes through {:ok, changes} and writes audit row" do
+      multi =
+        Multi.new()
+        |> Multi.run(:data, fn _repo, _changes -> {:ok, %{value: 42}} end)
+
+      result = @repo.transaction(multi)
+
+      assert {:ok, %{data: %{value: 42}}} =
+               Audit.log_best_effort(result, "test.best.success", "actor-best",
+                 actor_type: "system",
+                 audit_attrs: %{subject_id: "sub-1", subject_type: "user"}
+               )
+
+      assert @repo.aggregate(AuditLog, :count, :id) == 1
+      audit_log = @repo.one!(AuditLog)
+      assert audit_log.action == "test.best.success"
+      assert audit_log.actor_id == "actor-best"
+      assert audit_log.actor_type == "system"
+      assert audit_log.subject_id == "sub-1"
+      assert audit_log.subject_type == "user"
+      assert audit_log.outcome == "success"
+    end
+
+    test "failure branch: writes failure audit with format_error output" do
+      multi =
+        Multi.new()
+        |> Multi.run(:fail, fn _repo, _changes -> {:error, :oops} end)
+
+      result = @repo.transaction(multi)
+
+      assert {:error, :oops} =
+               Audit.log_best_effort(result, "test.best.fail", "actor-best", actor_type: "system")
+
+      assert @repo.aggregate(AuditLog, :count, :id) == 1
+      audit_log = @repo.one!(AuditLog)
+      assert audit_log.action == "test.best.fail"
+      assert audit_log.outcome == "failure"
+      assert audit_log.metadata["error"] == "oops"
+    end
+
+    test "format_error parity: log_best_effort failure matches transact/4 failure" do
+      multi =
+        Multi.new()
+        |> Multi.run(:fail, fn _repo, _changes -> {:error, {:validation, "bad"}} end)
+
+      result = @repo.transaction(multi)
+
+      assert {:error, {:validation, "bad"}} =
+               Audit.log_best_effort(result, "test.parity.best", "actor-parity",
+                 actor_type: "system"
+               )
+
+      log_best_log = @repo.one!(AuditLog)
+
+      audited =
+        Multi.new()
+        |> Multi.run(:fail, fn _repo, _changes -> {:error, {:validation, "bad"}} end)
+        |> Audit.wrap()
+        |> Audit.append_to_multi(:audit, @valid_attrs)
+
+      assert {:error, {:validation, "bad"}} =
+               Audit.transact(audited, "test.parity.transact", "actor-parity",
+                 actor_type: "system"
+               )
+
+      transact_log = @repo.one!(from(al in AuditLog, where: al.action == "test.parity.transact"))
+
+      assert log_best_log.metadata["error"] == transact_log.metadata["error"]
+    end
+
+    test "crash-window: committed transaction without log_best_effort leaves no audit row" do
+      multi =
+        Multi.new()
+        |> Multi.run(:data, fn _repo, _changes -> {:ok, %{value: 42}} end)
+
+      # Simulate: commit succeeds but log_best_effort never runs
+      {:ok, %{data: %{value: 42}}} = @repo.transaction(multi)
+
+      # No audit row was ever written
+      assert @repo.aggregate(AuditLog, :count, :id) == 0
+
+      # Reconcile finds nothing to recover
+      assert {:ok, 0} = Audit.reconcile(@repo, 100)
+    end
+  end
+
   describe "append_to_multi/3" do
     test "with static map, inserts audit log when multi succeeds" do
       audited =
@@ -387,7 +525,8 @@ defmodule Fort.AuditIntegrationTest do
 
     test "increments audit_steps on each call" do
       audited =
-        Audit.new()
+        Multi.new()
+        |> Audit.wrap()
         |> Audit.append_to_multi(:step1, @valid_attrs)
         |> Audit.append_to_multi(:step2, @valid_attrs)
 
